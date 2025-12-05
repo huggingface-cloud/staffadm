@@ -227,7 +227,7 @@ export default function RosterEngine() {
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  Assignments ({result.assignments.length})
+                  Assignments ({result.assignments?.length || 0})
                 </button>
                 <button
                   onClick={() => setActiveView('gaps')}
@@ -237,7 +237,7 @@ export default function RosterEngine() {
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  Resource Gaps ({result.unassignable.length})
+                  Resource Gaps ({result.unassignable?.length || 0})
                 </button>
               </nav>
             </div>
@@ -263,7 +263,7 @@ export default function RosterEngine() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {result.assignments.map((assignment, idx) => (
+                      {result.assignments?.map((assignment, idx) => (
                         <tr key={idx} className="hover:bg-gray-50">
                           <td className="px-4 py-3 text-sm text-gray-900">
                             {assignment.employee.first_name} {assignment.employee.last_name}
@@ -302,12 +302,12 @@ export default function RosterEngine() {
 
               {activeView === 'gaps' && (
                 <div className="space-y-4">
-                  {result.unassignable.length === 0 ? (
+                  {!result.unassignable || result.unassignable.length === 0 ? (
                     <div className="text-center py-8 text-gray-500">
                       No resource gaps found! All shifts are fully assigned.
                     </div>
                   ) : (
-                    result.unassignable.map((gap, idx) => (
+                    result.unassignable?.map((gap, idx) => (
                       <div
                         key={idx}
                         className="border border-red-200 bg-red-50 rounded-lg p-4"
