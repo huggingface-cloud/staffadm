@@ -54,7 +54,7 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true)
-      const data = await api.employees.getAll({ is_active: true })
+      const data = await api.employees.getAll({ active_for_rostering: true })
       setEmployees(data)
       setError(null)
     } catch (err) {

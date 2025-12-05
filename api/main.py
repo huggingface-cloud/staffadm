@@ -47,15 +47,15 @@ def health_check():
 @app.get("/api/employees", response_model=List[dict])
 async def get_employees(
     opco_id: Optional[str] = Query(None),
-    dept_id: Optional[str] = Query(None),
-    is_active: Optional[bool] = Query(None)
+    department_id: Optional[str] = Query(None),
+    active_for_rostering: Optional[bool] = Query(None)
 ):
     """
     Get all employees with their core details, active qualifications, and anomalies.
 
     - **opco_id**: Filter by operating company
-    - **dept_id**: Filter by department
-    - **is_active**: Filter by active status
+    - **department_id**: Filter by department
+    - **active_for_rostering**: Filter by active status
     """
     try:
         supabase = get_supabase()
@@ -99,12 +99,12 @@ async def get_employees(
         # Apply filters
         if opco_id:
             query = query.eq("opco_id", opco_id)
-        if dept_id:
-            query = query.eq("dept_id", dept_id)
-        if is_active is not None:
-            query = query.eq("is_active", is_active)
+        if department_id:
+            query = query.eq("department_id", department_id)
+        if active_for_rostering is not None:
+            query = query.eq("active_for_rostering", active_for_rostering)
 
-        query = query.order("employee_code", desc=False)
+        query = query.order("email", desc=False)
 
         response = query.execute()
 
@@ -139,16 +139,21 @@ async def get_employees(
                 if ra.get("employee_roles")
             ]
 
+            # Generate employee code from email
+            email_user = emp["email"].split("@")[0]
+            employee_code = f"EMP-{email_user.upper()[:6]}-{emp['id'][:4].upper()}"
+
             employee_data = {
                 "id": emp["id"],
-                "employee_code": emp["employee_code"],
+                "employee_code": employee_code,
                 "first_name": emp["first_name"],
                 "last_name": emp["last_name"],
                 "full_name": f"{emp['first_name']} {emp['last_name']}",
                 "email": emp["email"],
                 "phone": emp.get("phone"),
                 "joining_date": emp["joining_date"],
-                "is_active": emp["is_active"],
+                "active_for_rostering": emp.get("active_for_rostering", True),
+                "is_active": emp.get("active_for_rostering", True),
                 "operating_company": emp.get("operating_companies"),
                 "department": emp.get("departments"),
                 "roles": roles,

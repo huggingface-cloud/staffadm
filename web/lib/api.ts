@@ -3,11 +3,11 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
 
 export const api = {
   employees: {
-    getAll: (params?: { opco_id?: string; dept_id?: string; is_active?: boolean }) => {
+    getAll: (params?: { opco_id?: string; department_id?: string; active_for_rostering?: boolean }) => {
       const searchParams = new URLSearchParams()
       if (params?.opco_id) searchParams.append('opco_id', params.opco_id)
-      if (params?.dept_id) searchParams.append('dept_id', params.dept_id)
-      if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
+      if (params?.department_id) searchParams.append('department_id', params.department_id)
+      if (params?.active_for_rostering !== undefined) searchParams.append('active_for_rostering', String(params.active_for_rostering))
 
       const url = `${API_BASE_URL}/api/employees${searchParams.toString() ? '?' + searchParams.toString() : ''}`
       return fetch(url).then(res => res.json())
