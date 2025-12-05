@@ -60,38 +60,8 @@ async def get_employees(
     try:
         supabase = get_supabase()
 
-        # Build query with all joins
-        query = supabase.table("employees").select("""
-            *,
-            operating_companies!inner(id, name, code),
-            departments!inner(id, name, code),
-            employee_roles(
-                roles(id, name, description)
-            ),
-            employee_qualifications(
-                id,
-                acquired_date,
-                expiry_date,
-                is_valid,
-                qualification_types(id, name, details, validity_period_months, is_mandatory)
-            ),
-            employee_anomalies(
-                id,
-                anomaly_type,
-                start_date,
-                end_date,
-                restriction_comment
-            ),
-            contracts(
-                id,
-                contract_type,
-                valid_from,
-                valid_until,
-                weekly_hours_limit,
-                min_rest_hours,
-                is_active
-            )
-        """)
+        # Fetch employees first
+        query = supabase.table("employees").select("*")
 
         # Apply filters
         if opco_id:
@@ -108,42 +78,128 @@ async def get_employees(
         if not response.data:
             return []
 
+        # Fetch all related data in separate queries for manual joining
+        # (Supabase Python client has issues with nested joins)
+        employee_ids = [emp["id"] for emp in response.data]
+
+        # Fetch operating companies
+        opcos_response = supabase.table("operating_companies").select("*").execute()
+        opcos_map = {opco["id"]: opco for opco in opcos_response.data}
+
+        # Fetch departments
+        depts_response = supabase.table("departments").select("*").execute()
+        depts_map = {dept["id"]: dept for dept in depts_response.data}
+
+        # Fetch employee roles with role details
+        emp_roles_response = supabase.table("employee_roles").select("*, roles(*)").in_("employee_id", employee_ids).execute()
+        emp_roles_map = {}
+        for er in emp_roles_response.data:
+            if er["employee_id"] not in emp_roles_map:
+                emp_roles_map[er["employee_id"]] = []
+            emp_roles_map[er["employee_id"]].append(er)
+
+        # Fetch employee qualifications with qualification types
+        emp_quals_response = supabase.table("employee_qualifications").select("*, qualification_types(*)").in_("employee_id", employee_ids).execute()
+        emp_quals_map = {}
+        for eq in emp_quals_response.data:
+            if eq["employee_id"] not in emp_quals_map:
+                emp_quals_map[eq["employee_id"]] = []
+            emp_quals_map[eq["employee_id"]].append(eq)
+
+        # Fetch employee anomalies
+        emp_anomalies_response = supabase.table("employee_anomalies").select("*").in_("employee_id", employee_ids).execute()
+        emp_anomalies_map = {}
+        for ea in emp_anomalies_response.data:
+            if ea["employee_id"] not in emp_anomalies_map:
+                emp_anomalies_map[ea["employee_id"]] = []
+            emp_anomalies_map[ea["employee_id"]].append(ea)
+
+        # Fetch contracts
+        contracts_response = supabase.table("contracts").select("*").in_("employee_id", employee_ids).execute()
+        contracts_map = {}
+        for contract in contracts_response.data:
+            if contract["employee_id"] not in contracts_map:
+                contracts_map[contract["employee_id"]] = []
+            contracts_map[contract["employee_id"]].append(contract)
+
         # Transform the data for better structure
         employees = []
         for emp in response.data:
+            emp_id = emp["id"]
+
+            # Get related data using the maps
+            emp_qualifications = emp_quals_map.get(emp_id, [])
+            emp_anomalies = emp_anomalies_map.get(emp_id, [])
+            emp_contracts = contracts_map.get(emp_id, [])
+            emp_roles_list = emp_roles_map.get(emp_id, [])
+
             # Get active qualifications only
             active_qualifications = [
-                q for q in emp.get("employee_qualifications", [])
+                {
+                    "qualification_types": q.get("qualification_types"),
+                    "acquired_date": q.get("achieved_date"),  # Note: schema has achieved_date, not acquired_date
+                    "expiry_date": q.get("expiry_date"),
+                    "is_valid": q.get("is_valid", False)
+                }
+                for q in emp_qualifications
                 if q.get("is_valid", False)
             ]
 
             # Get active anomalies only (based on date range)
             from datetime import datetime
             today = datetime.now().date()
-            active_anomalies = [
-                a for a in emp.get("employee_anomalies", [])
-                if (
-                    datetime.fromisoformat(a["start_date"]).date() <= today and
-                    (a.get("end_date") is None or datetime.fromisoformat(a["end_date"]).date() >= today)
-                )
-            ]
+            active_anomalies = []
+            for a in emp_anomalies:
+                start_date = datetime.fromisoformat(str(a["start_date"])).date()
+                end_date = datetime.fromisoformat(str(a["end_date"])).date() if a.get("end_date") else None
+                if start_date <= today and (end_date is None or end_date >= today):
+                    active_anomalies.append({
+                        "anomaly_type": a["anomaly_type"],
+                        "restrictions": a.get("restriction_comment"),
+                        "start_date": str(a["start_date"]),
+                        "end_date": str(a["end_date"]) if a.get("end_date") else None
+                    })
 
             # Get active contract
-            active_contract = next(
-                (c for c in emp.get("contracts", []) if c.get("is_active", False)),
-                None
-            )
+            active_contract = None
+            for c in emp_contracts:
+                if c.get("is_active", False):
+                    active_contract = {
+                        "contract_type": c["contract_type"],
+                        "weekly_hours": c.get("weekly_hours_limit", 40),
+                        "is_active": c["is_active"]
+                    }
+                    break
 
             # Extract roles
-            roles = [
-                er["roles"]
-                for er in emp.get("employee_roles", [])
-                if er.get("roles")
-            ]
+            roles = []
+            for er in emp_roles_list:
+                if er.get("roles"):
+                    roles.append({
+                        "role_name": er["roles"].get("name"),
+                        "description": er["roles"].get("description")
+                    })
 
             # Generate employee code from email
             email_user = emp["email"].split("@")[0]
             employee_code = f"EMP-{email_user.upper()[:6]}-{emp['id'][:4].upper()}"
+
+            # Get operating company and department
+            operating_company = None
+            if emp.get("opco_id") and emp["opco_id"] in opcos_map:
+                opco = opcos_map[emp["opco_id"]]
+                operating_company = {
+                    "name": opco["name"],
+                    "code": opco["code"]
+                }
+
+            department = None
+            if emp.get("department_id") and emp["department_id"] in depts_map:
+                dept = depts_map[emp["department_id"]]
+                department = {
+                    "name": dept["name"],
+                    "code": dept.get("code")
+                }
 
             employee_data = {
                 "id": emp["id"],
@@ -156,8 +212,8 @@ async def get_employees(
                 "joining_date": emp["joining_date"],
                 "active_for_rostering": emp.get("active_for_rostering", True),
                 "is_active": emp.get("active_for_rostering", True),
-                "operating_company": emp.get("operating_companies"),
-                "department": emp.get("departments"),
+                "operating_company": operating_company,
+                "department": department,
                 "roles": roles,
                 "active_qualifications": active_qualifications,
                 "active_anomalies": active_anomalies,

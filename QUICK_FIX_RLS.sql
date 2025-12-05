@@ -3,30 +3,38 @@
 -- Copy and paste this entire script into Supabase SQL Editor and run it
 -- ================================================================
 
--- Allow service_role full access to employees
-CREATE POLICY IF NOT EXISTS "Allow service_role all on employees"
-ON employees FOR ALL
-TO service_role
-USING (true)
-WITH CHECK (true);
+-- 1. GUARANTEE RLS IS ENABLED
+ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contracts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.shift_requirements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.roster_entries ENABLE ROW LEVEL SECURITY;
 
--- Allow service_role full access to contracts
-CREATE POLICY IF NOT EXISTS "Allow service_role all on contracts"
-ON contracts FOR ALL
-TO service_role
-USING (true)
-WITH CHECK (true);
+-- 2. SERVICE ROLE POLICIES (Full Access for Backend/Admin Operations)
 
--- Allow service_role full access to shift_requirements
-CREATE POLICY IF NOT EXISTS "Allow service_role all on shift_requirements"
-ON shift_requirements FOR ALL
-TO service_role
-USING (true)
-WITH CHECK (true);
+create policy "RLS_Employees_Admin_Access"
+on "public"."employees"
+as PERMISSIVE
+for ALL
+to service_role
+using (true) with check ( true );
 
--- Allow service_role full access to roster_entries
-CREATE POLICY IF NOT EXISTS "Allow service_role all on roster_entries"
-ON roster_entries FOR ALL
-TO service_role
-USING (true)
-WITH CHECK (true);
+create policy "RLS_Contracts_Admin_Access"
+on "public"."contracts"
+as PERMISSIVE
+for ALL
+to service_role
+using (true) with check ( true );
+
+create policy "RLS_Shifts_Admin_Access"
+on "public"."shift_requirements"
+as PERMISSIVE
+for ALL
+to service_role
+using (true) with check ( true );
+
+create policy "RLS_Rosters_Admin_Access"
+on "public"."roster_entries"
+as PERMISSIVE
+for ALL
+to service_role
+using (true) with check ( true );
