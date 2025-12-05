@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import Employees from '@/components/Employees'
+import Employees from '@/components/EmployeesNew'
 import RosterEngine from '@/components/RosterEngine'
 
 type Tab = 'roster' | 'employees'

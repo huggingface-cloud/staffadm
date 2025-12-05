@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { format } from 'date-fns'
+import { api } from '@/lib/api'
 
 interface RosterAssignment {
   shift_id: string
@@ -66,24 +67,19 @@ export default function RosterEngine() {
       setLoading(true)
       setError(null)
 
-      const response = await fetch('/api/roster/assign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          start_date: startDate,
-          end_date: endDate,
-        }),
+      const data = await api.roster.assign({
+        start_date: startDate,
+        end_date: endDate
       })
-
-      const data = await response.json()
 
       if (data.error) {
         setError(data.error)
       } else {
-        setResult(data.data)
+        setResult(data)
       }
     } catch (err) {
-      setError('Failed to generate roster')
+      setError('Failed to generate roster. Make sure FastAPI backend is running on http://localhost:8001')
+      console.error('Roster generation error:', err)
     } finally {
       setLoading(false)
     }
