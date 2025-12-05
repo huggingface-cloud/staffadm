@@ -29,26 +29,26 @@ class RosteringEngine:
         # Fetch employees
         emp_query = self.supabase.table("employees").select("""
             *,
-            employee_role_assignments(role_id),
+            employee_roles(role_id),
             employee_qualifications(qualification_type_id, is_valid),
-            employee_anomalies(anomaly_type, start_date, end_date, is_active, restrictions),
-            contracts(weekly_hours, max_consecutive_days, min_rest_hours, is_active)
-        """).eq("is_active", True)
+            employee_anomalies(anomaly_type, start_date, end_date, restriction_comment),
+            contracts(weekly_hours_limit, min_rest_hours, is_active)
+        """).eq("active_for_rostering", True)
 
         if dept_id:
-            emp_query = emp_query.eq("dept_id", dept_id)
+            emp_query = emp_query.eq("department_id", dept_id)
 
         emp_response = emp_query.execute()
         self.employees = emp_response.data or []
 
-        # Fetch shifts
-        shift_query = self.supabase.table("shifts").select("""
+        # Fetch shift requirements
+        shift_query = self.supabase.table("shift_requirements").select("""
             *,
-            shift_requirements(role_id, required_count, skill_level)
-        """).gte("shift_date", start_date).lte("shift_date", end_date).neq("status", "cancelled")
+            roles(id, name)
+        """).gte("start_time", start_date).lte("end_time", end_date).neq("status", "cancelled")
 
         if dept_id:
-            shift_query = shift_query.eq("dept_id", dept_id)
+            shift_query = shift_query.eq("department_id", dept_id)
 
         shift_response = shift_query.execute()
         self.shifts = shift_response.data or []
@@ -170,7 +170,7 @@ class RosteringEngine:
                 continue
 
             # Check role assignment
-            role_assignments = emp.get("employee_role_assignments", [])
+            role_assignments = emp.get("employee_roles", [])
             if not any(ra["role_id"] == role_id for ra in role_assignments):
                 continue
 
@@ -210,9 +210,17 @@ class RosteringEngine:
         valid_quals = [q for q in emp_quals if q.get("is_valid")]
         score += len(valid_quals) * 10
 
-        # No anomalies
+        # No anomalies (check if active based on dates)
         anomalies = emp.get("employee_anomalies", [])
-        active_anomalies = [a for a in anomalies if a.get("is_active")]
+        from datetime import datetime
+        today = datetime.now().date()
+        active_anomalies = [
+            a for a in anomalies
+            if (
+                datetime.fromisoformat(a["start_date"]).date() <= today and
+                (a.get("end_date") is None or datetime.fromisoformat(a["end_date"]).date() >= today)
+            )
+        ]
         if not active_anomalies:
             score += 20
         else:
@@ -235,13 +243,18 @@ class RosteringEngine:
         """Get assignment warnings for an employee."""
         warnings = []
 
-        # Check anomalies
+        # Check anomalies (check if active based on dates)
         anomalies = emp.get("employee_anomalies", [])
+        from datetime import datetime
+        today = datetime.now().date()
         for anomaly in anomalies:
-            if anomaly.get("is_active"):
+            if (
+                datetime.fromisoformat(anomaly["start_date"]).date() <= today and
+                (anomaly.get("end_date") is None or datetime.fromisoformat(anomaly["end_date"]).date() >= today)
+            ):
                 warning = anomaly["anomaly_type"]
-                if anomaly.get("restrictions"):
-                    warning += f": {anomaly['restrictions']}"
+                if anomaly.get("restriction_comment"):
+                    warning += f": {anomaly['restriction_comment']}"
                 warnings.append(warning)
 
         # Check rest period
@@ -323,10 +336,16 @@ class RosteringEngine:
                     "affected": [f"{e['first_name']} {e['last_name']}" for e in on_absence[:3]]
                 })
 
-            # Check anomalies
+            # Check anomalies (check if active based on dates)
+            from datetime import datetime
+            today = datetime.now().date()
             with_anomalies = [
                 e for e in employees_with_role
-                if any(a.get("is_active") for a in e.get("employee_anomalies", []))
+                if any(
+                    datetime.fromisoformat(a["start_date"]).date() <= today and
+                    (a.get("end_date") is None or datetime.fromisoformat(a["end_date"]).date() >= today)
+                    for a in e.get("employee_anomalies", [])
+                )
             ]
 
             if with_anomalies:

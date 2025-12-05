@@ -65,8 +65,8 @@ async def get_employees(
             *,
             operating_companies!inner(id, name, code),
             departments!inner(id, name, code),
-            employee_role_assignments(
-                employee_roles(id, role_name, description)
+            employee_roles(
+                roles(id, name, description)
             ),
             employee_qualifications(
                 id,
@@ -80,17 +80,14 @@ async def get_employees(
                 anomaly_type,
                 start_date,
                 end_date,
-                restrictions,
-                comments,
-                is_active
+                restriction_comment
             ),
             contracts(
                 id,
                 contract_type,
-                start_date,
-                end_date,
-                weekly_hours,
-                max_consecutive_days,
+                valid_from,
+                valid_until,
+                weekly_hours_limit,
                 min_rest_hours,
                 is_active
             )
@@ -120,10 +117,15 @@ async def get_employees(
                 if q.get("is_valid", False)
             ]
 
-            # Get active anomalies only
+            # Get active anomalies only (based on date range)
+            from datetime import datetime
+            today = datetime.now().date()
             active_anomalies = [
                 a for a in emp.get("employee_anomalies", [])
-                if a.get("is_active", False)
+                if (
+                    datetime.fromisoformat(a["start_date"]).date() <= today and
+                    (a.get("end_date") is None or datetime.fromisoformat(a["end_date"]).date() >= today)
+                )
             ]
 
             # Get active contract
@@ -134,9 +136,9 @@ async def get_employees(
 
             # Extract roles
             roles = [
-                ra["employee_roles"]
-                for ra in emp.get("employee_role_assignments", [])
-                if ra.get("employee_roles")
+                er["roles"]
+                for er in emp.get("employee_roles", [])
+                if er.get("roles")
             ]
 
             # Generate employee code from email
@@ -187,8 +189,8 @@ async def get_employee_by_id(employee_id: str):
             *,
             operating_companies(id, name, code),
             departments(id, name, code),
-            employee_role_assignments(
-                employee_roles(id, role_name, description)
+            employee_roles(
+                roles(id, name, description)
             ),
             employee_qualifications(
                 id,
@@ -202,17 +204,14 @@ async def get_employee_by_id(employee_id: str):
                 anomaly_type,
                 start_date,
                 end_date,
-                restrictions,
-                comments,
-                is_active
+                restriction_comment
             ),
             contracts(
                 id,
                 contract_type,
-                start_date,
-                end_date,
-                weekly_hours,
-                max_consecutive_days,
+                valid_from,
+                valid_until,
+                weekly_hours_limit,
                 min_rest_hours,
                 is_active
             )
@@ -308,31 +307,26 @@ async def assign_roster(request: RosterRequest = Body(...)):
 async def get_shifts(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
-    dept_id: Optional[str] = Query(None)
+    department_id: Optional[str] = Query(None)
 ):
-    """Get shifts with requirements."""
+    """Get shift requirements."""
     try:
         supabase = get_supabase()
 
-        query = supabase.table("shifts").select("""
+        query = supabase.table("shift_requirements").select("""
             *,
             departments(name, code),
-            shift_requirements(
-                role_id,
-                required_count,
-                skill_level,
-                employee_roles(role_name)
-            )
+            roles(name, description)
         """)
 
         if start_date:
-            query = query.gte("shift_date", start_date)
+            query = query.gte("start_time", start_date)
         if end_date:
-            query = query.lte("shift_date", end_date)
-        if dept_id:
-            query = query.eq("dept_id", dept_id)
+            query = query.lte("end_time", end_date)
+        if department_id:
+            query = query.eq("department_id", department_id)
 
-        query = query.order("shift_date", desc=False)
+        query = query.order("start_time", desc=False)
 
         response = query.execute()
         return response.data or []
@@ -353,7 +347,7 @@ async def get_absences(
 
         query = supabase.table("absences").select("""
             *,
-            employees(employee_code, first_name, last_name)
+            employees(id, first_name, last_name, email)
         """)
 
         if employee_id:
