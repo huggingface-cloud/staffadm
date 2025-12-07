@@ -51,7 +51,7 @@ class OptimizationRequest(BaseModel):
     department_filter: Optional[str] = Field(None, description="Filter by department")
     user_id: Optional[str] = Field(None, description="User ID for audit trail")
     description: Optional[str] = Field(None, description="Description of optimization run")
-    save_results: bool = Field(True, description="Whether to save results to database")
+    save_results: bool = Field(False, description="Whether to save results to database (requires optimization_runs table)")
 
 class OptimizationResponse(BaseModel):
     job_id: Optional[str]

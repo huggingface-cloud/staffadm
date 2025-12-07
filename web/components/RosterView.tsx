@@ -157,7 +157,7 @@ export default function RosterView() {
         body: JSON.stringify({
           start_date: startDate,
           end_date: endDate,
-          save_results: true
+          save_results: false  // Set to true after optimization_runs table is created
         })
       })
 

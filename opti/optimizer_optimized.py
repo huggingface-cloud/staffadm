@@ -68,59 +68,50 @@ def load_data_from_supabase(employees_data: List[dict], shifts_data: List[dict])
     # Process employees
     for emp_data in employees_data:
         emp_id = emp_data['id']
-        role_id = emp_data['role']
+        dept_id = emp_data.get('department_id', 'UNKNOWN')
 
         employees[emp_id] = {
-            'role_id': role_id,
-            'dept_id': role_id.split('_')[0],
-            'max_hours_week': emp_data.get('max_hours_week', 40)
+            'role_id': dept_id,  # Using department as role for now
+            'dept_id': dept_id,
+            'max_hours_week': 40  # Default to 40 hours
         }
 
-        # Qualifications
-        quals = {}
-        for q in emp_data.get('qualifications', []):
-            try:
-                quals[q['qual_id']] = datetime.strptime(q['expiry_date'], '%Y-%m-%d')
-            except (ValueError, KeyError):
-                pass
-        employee_quals[emp_id] = quals
+        # Qualifications - skipped for now as we don't have this data
+        employee_quals[emp_id] = {}
 
-        # Anomalies
-        if emp_data.get('anomalies'):
-            a = emp_data['anomalies'][0]
-            try:
-                employee_anomalies[emp_id] = {
-                    'restricted_roles': a['restricted_roles'],
-                    'active_start': datetime.strptime(a['start_date'], '%Y-%m-%d'),
-                    'active_end': datetime.strptime(a['end_date'], '%Y-%m-%d') + timedelta(days=1, seconds=-1)
-                }
-            except (ValueError, KeyError):
-                pass
+        # Anomalies - skipped for now as we don't have this data
+        # (This would come from employee_anomalies table)
 
-        # Absences
-        if emp_data.get('absences'):
-            a = emp_data['absences'][0]
-            try:
-                employee_absences[emp_id] = (
-                    datetime.strptime(a['start_date'], '%Y-%m-%d'),
-                    datetime.strptime(a['end_date'], '%Y-%m-%d') + timedelta(days=1, seconds=-1)
-                )
-            except (ValueError, KeyError):
-                pass
+        # Absences - skipped for now as we don't have this data
+        # (This would come from absences table)
 
     # Process shifts
     for shift_data in shifts_data:
         shift_id = shift_data['id']
         try:
-            start_time = datetime.strptime(shift_data['start_time'], '%Y-%m-%d %H:%M:%S')
-        except Exception:
+            # Handle timestamp format: 2025-12-01T09:00:00+00:00 or 2025-12-01 09:00:00
+            start_str = shift_data['start_time']
+            end_str = shift_data['end_time']
+
+            # Try parsing with timezone first, then without
+            try:
+                start_time = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                end_time = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+            except:
+                start_time = datetime.strptime(start_str, '%Y-%m-%d %H:%M:%S')
+                end_time = datetime.strptime(end_str, '%Y-%m-%d %H:%M:%S')
+
+            # Calculate duration in hours
+            duration_hours = (end_time - start_time).total_seconds() / 3600
+        except Exception as e:
+            print(f"Error parsing shift {shift_id}: {e}")
             continue
 
         shifts[shift_id] = {
-            'role_id': shift_data['role'],
-            'duration_hours': shift_data['duration_hours'],
+            'role_id': shift_data.get('required_role_id', 'UNKNOWN'),
+            'duration_hours': duration_hours,
             'start_time': start_time,
-            'end_time': start_time + timedelta(hours=shift_data['duration_hours']),
+            'end_time': end_time,
             'week_number': start_time.isocalendar()[1],
             'day_of_week': start_time.weekday(),
             'date_str': start_time.strftime('%Y-%m-%d')
@@ -213,41 +204,22 @@ class RosterOptimizer:
         """
         Check if employee is eligible for shift.
         Consolidates all eligibility logic in one place.
+
+        SIMPLIFIED VERSION: For now, we allow any employee to take any shift
+        until we have proper role and qualification data in the database.
         """
         shift = self.shifts[shift_id]
         emp = self.employees[emp_id]
 
-        # 1. Role match
-        if emp['role_id'] != shift['role_id']:
-            return False
+        # Temporarily relaxed constraints:
+        # - Skip role matching (would need employee_roles table)
+        # - Skip qualification checks (would need employee_qualifications table)
+        # - Skip absence checks (would need absences table properly linked)
+        # - Skip anomaly checks (would need employee_anomalies table)
 
-        # 2. Shift duration constraint
+        # Only enforce basic shift duration constraint
         if shift['duration_hours'] > CONFIG["HARD_CONSTRAINTS"]["MAX_SHIFT_DURATION_HOURS"]:
             return False
-
-        # 3. Qualifications
-        required_quals = ROLE_QUAL_REQ.get(shift['role_id'], [])
-        qual_threshold = timedelta(days=CONFIG["HARD_CONSTRAINTS"]["QUAL_EXPIRY_THRESHOLD_DAYS"])
-        for rq in required_quals:
-            expiry = self.employee_quals.get(emp_id, {}).get(rq)
-            if not expiry:
-                return False
-            if expiry < (shift['start_time'] + qual_threshold):
-                return False
-
-        # 4. Absence check
-        absence = self.employee_absences.get(emp_id)
-        if absence:
-            astart, aend = absence
-            if astart <= shift['start_time'] <= aend:
-                return False
-
-        # 5. Anomaly restrictions
-        anomaly = self.employee_anomalies.get(emp_id)
-        if anomaly:
-            if anomaly['active_start'] <= shift['start_time'] <= anomaly['active_end']:
-                if shift['role_id'] in anomaly['restricted_roles']:
-                    return False
 
         return True
 
