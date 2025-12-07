@@ -21,7 +21,7 @@ This guide explains how to integrate the roster optimizer (from `/opti` folder) 
          ↓
 ┌─────────────────┐
 │ Optimizer API   │ ← Optimization Engine
-│  (Port 8002)    │ → Reads from Supabase
+│  (Port 9001)    │ → Reads from Supabase
 └─────────────────┘  → Writes results back
 ```
 
@@ -77,7 +77,7 @@ cd opti/
 python optimizer_api.py
 ```
 
-The optimizer API will run on port 8002.
+The optimizer API will run on port 9001.
 
 ### 5. Update Main API to Call Optimizer
 
@@ -86,7 +86,7 @@ Add proxy endpoint in `api/main.py`:
 ```python
 import httpx
 
-OPTIMIZER_API_URL = "http://localhost:8002"
+OPTIMIZER_API_URL = "http://localhost:9001"
 
 @app.post("/api/optimize")
 async def run_optimization(request: dict):
@@ -302,7 +302,7 @@ const runOptimization = async () => {
 ### 1. Test Optimizer API Directly
 
 ```bash
-curl -X POST http://localhost:8002/optimize \
+curl -X POST http://localhost:9001/optimize \
   -H "Content-Type: application/json" \
   -d '{
     "start_date": "2025-12-01",
@@ -392,7 +392,7 @@ WHERE status = 'completed'
 
 Check:
 1. PuLP installed: `pip list | grep PuLP`
-2. Port 8002 available: `lsof -i :8002`
+2. Port 9001 available: `lsof -i :9001`
 3. Environment variables set
 
 ### No Results Returned
@@ -415,7 +415,7 @@ Optimize:
 
 1. ✅ Run `optimizer_schema_addon.sql` in Supabase
 2. ✅ Configure optimizer `.env` file
-3. ⏳ Start optimizer API on port 8002
+3. ⏳ Start optimizer API on port 9001
 4. ⏳ Add API proxy endpoints to main.py
 5. ⏳ Update frontend to use real API calls
 6. ⏳ Test end-to-end optimization flow
