@@ -1,0 +1,19 @@
+# Roster Optimizer Python Dependencies
+
+# Core optimization
+pulp>=2.7.0
+
+# Supabase integration
+supabase>=2.0.0
+
+# FastAPI microservice
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Optional: High-performance solvers
+# gurobi  # Commercial license required
+# cplex   # Commercial license required

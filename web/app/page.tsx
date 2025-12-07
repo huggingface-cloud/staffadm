@@ -4,8 +4,9 @@ import { useState } from 'react'
 import Employees from '@/components/EmployeesNew'
 import RosterEngine from '@/components/RosterEngine'
 import RosterView from '@/components/RosterView'
+import OptimizerSettings from '@/components/OptimizerSettings'
 
-type Tab = 'schedule' | 'optimizer' | 'employees'
+type Tab = 'schedule' | 'optimizer' | 'employees' | 'settings'
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('schedule')
@@ -14,6 +15,7 @@ export default function Home() {
     { id: 'schedule' as Tab, label: '📅 Schedule View' },
     { id: 'optimizer' as Tab, label: '🎯 Roster Optimizer' },
     { id: 'employees' as Tab, label: '👥 Employees' },
+    { id: 'settings' as Tab, label: '⚙️ Optimizer Settings' },
   ]
 
   return (
@@ -59,6 +61,7 @@ export default function Home() {
         {activeTab === 'schedule' && <RosterView />}
         {activeTab === 'optimizer' && <RosterEngine />}
         {activeTab === 'employees' && <Employees />}
+        {activeTab === 'settings' && <OptimizerSettings />}
       </main>
     </div>
   )
