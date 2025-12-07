@@ -600,9 +600,7 @@ async def get_roster_view(
             headcount_needed,
             location,
             required_role_id,
-            department_id,
-            roles!shift_requirements_required_role_id_fkey(id, name),
-            departments(id, name, code)
+            department_id
         """).gte("start_time", start_datetime).lte("start_time", end_datetime)
 
         if department_id:
@@ -624,6 +622,20 @@ async def get_roster_view(
                 })
                 current += timedelta(days=1)
             return result
+
+        # Fetch roles and departments separately (manual join)
+        role_ids = list(set([s["required_role_id"] for s in shifts_response.data if s.get("required_role_id")]))
+        dept_ids = list(set([s["department_id"] for s in shifts_response.data if s.get("department_id")]))
+
+        roles_map = {}
+        if role_ids:
+            roles_response = supabase.table("roles").select("id, name").in_("id", role_ids).execute()
+            roles_map = {r["id"]: r for r in roles_response.data or []}
+
+        depts_map = {}
+        if dept_ids:
+            depts_response = supabase.table("departments").select("id, name, code").in_("id", dept_ids).execute()
+            depts_map = {d["id"]: d for d in depts_response.data or []}
 
         shift_ids = [s["id"] for s in shifts_response.data]
 
@@ -681,10 +693,10 @@ async def get_roster_view(
             if shift_date not in roster_by_date:
                 roster_by_date[shift_date] = []
 
-            # Get role name from the nested roles object
-            roles_obj = shift.get("roles")
-            if isinstance(roles_obj, dict):
-                role_name = roles_obj.get("name", "Unknown Role")
+            # Get role name from manual join map
+            role_id = shift.get("required_role_id")
+            if role_id and role_id in roles_map:
+                role_name = roles_map[role_id].get("name", "Unknown Role")
             else:
                 role_name = "Unknown Role"
 
