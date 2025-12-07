@@ -639,16 +639,22 @@ async def get_roster_view(
 
         shift_ids = [s["id"] for s in shifts_response.data]
 
-        # Fetch roster assignments for these shifts
+        # Fetch roster assignments for these shifts (without join)
         assignments_response = supabase.table("roster_assignments").select("""
             id,
             shift_id,
             employee_id,
             employee_weekly_hours,
             employee_overtime_hours,
-            is_cross_department,
-            employees(id, first_name, last_name, employee_code)
+            is_cross_department
         """).in_("shift_id", shift_ids).execute()
+
+        # Fetch employees manually for assignments
+        employee_ids = list(set([a["employee_id"] for a in assignments_response.data or [] if a.get("employee_id")]))
+        employees_map = {}
+        if employee_ids:
+            employees_response = supabase.table("employees").select("id, first_name, last_name").in_("id", employee_ids).execute()
+            employees_map = {e["id"]: e for e in employees_response.data or []}
 
         # Group assignments by shift_id
         assignments_by_shift = {}
@@ -657,7 +663,9 @@ async def get_roster_view(
             if shift_id not in assignments_by_shift:
                 assignments_by_shift[shift_id] = []
 
-            emp = assignment.get("employees", {})
+            # Get employee from manual join
+            employee_id = assignment.get("employee_id")
+            emp = employees_map.get(employee_id, {})
             weekly_hours = assignment.get("employee_weekly_hours", 0) or 0
 
             # Determine status based on hours
@@ -677,7 +685,7 @@ async def get_roster_view(
                 "id": assignment["id"],
                 "employeeId": emp.get("id"),
                 "employeeName": f"{emp.get('first_name', '')} {emp.get('last_name', '')}".strip(),
-                "employeeCode": emp.get("employee_code"),
+                "employeeCode": f"EMP-{emp.get('id', '')[:8]}" if emp.get("id") else None,
                 "weeklyHours": weekly_hours,
                 "status": status,
                 "warnings": warnings if warnings else None
