@@ -93,15 +93,16 @@ export default function RosterView() {
 
   const { start, end } = getDateRange()
 
+  // Convert to stable string keys for useEffect dependency
+  const startDate = format(start, 'yyyy-MM-dd')
+  const endDate = format(end, 'yyyy-MM-dd')
+
   // Fetch roster data from API
   useEffect(() => {
     const fetchRosterData = async () => {
       setIsLoading(true)
       setError(null)
       try {
-        const startDate = format(start, 'yyyy-MM-dd')
-        const endDate = format(end, 'yyyy-MM-dd')
-
         const response = await fetch(
           `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
         )
@@ -137,15 +138,12 @@ export default function RosterView() {
     }
 
     fetchRosterData()
-  }, [start, end])
+  }, [startDate, endDate])
 
   const runOptimization = async () => {
     setIsOptimizing(true)
     setError(null)
     try {
-      const startDate = format(start, 'yyyy-MM-dd')
-      const endDate = format(end, 'yyyy-MM-dd')
-
       const response = await fetch('http://localhost:8001/api/optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -163,12 +161,12 @@ export default function RosterView() {
       const result = await response.json()
 
       if (result.status === 'completed') {
-        // Reload roster data
+        // Reload roster data by refetching with same date range
         const rosterResponse = await fetch(
           `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
         )
         const data = await rosterResponse.json()
-        setScheduleData(data)
+        setScheduleData(data || [])
       } else if (result.job_id) {
         // TODO: Implement job polling for async optimization
         alert(`Optimization job started: ${result.job_id}. Please refresh to see results.`)
@@ -436,28 +434,38 @@ export default function RosterView() {
                             {/* Assignments */}
                             {shift.assignments.length > 0 ? (
                               <div className="flex flex-wrap gap-2">
-                                {shift.assignments.map((assignment) => (
-                                  <div
-                                    key={assignment.id}
-                                    className={`px-3 py-2 rounded border ${getStatusColor(assignment.status)} text-sm`}
-                                  >
-                                    <div className="font-medium">{assignment.employeeName}</div>
-                                    <div className="text-xs opacity-75">{assignment.employeeCode}</div>
-                                    {assignment.warnings && assignment.warnings.length > 0 && (
-                                      <div className="text-xs mt-1 opacity-90">
-                                        {assignment.warnings.map((w, i) => (
-                                          <div key={i}>⚠️ {w}</div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
+                                {shift.assignments.map((assignment) => {
+                                  const tooltipText = [
+                                    `${assignment.employeeName} (${assignment.employeeCode})`,
+                                    `Weekly hours: ${assignment.weeklyHours}h`,
+                                    ...(assignment.warnings || [])
+                                  ].join('\n')
+
+                                  return (
+                                    <div
+                                      key={assignment.id}
+                                      className={`px-3 py-2 rounded border ${getStatusColor(assignment.status)} text-sm cursor-help`}
+                                      title={tooltipText}
+                                    >
+                                      <div className="font-medium">{assignment.employeeName}</div>
+                                      <div className="text-xs opacity-75">{assignment.employeeCode}</div>
+                                      {assignment.warnings && assignment.warnings.length > 0 && (
+                                        <div className="text-xs mt-1 opacity-90">
+                                          {assignment.warnings.map((w, i) => (
+                                            <div key={i}>⚠️ {w}</div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })}
 
                                 {/* Show empty slots */}
                                 {gap > 0 && Array.from({ length: gap }).map((_, i) => (
                                   <div
                                     key={`empty-${i}`}
-                                    className="px-3 py-2 rounded border border-dashed border-gray-300 bg-white text-sm text-gray-400 flex items-center justify-center min-w-[120px]"
+                                    className="px-3 py-2 rounded border border-dashed border-gray-300 bg-white text-sm text-gray-400 flex items-center justify-center min-w-[120px] cursor-help"
+                                    title={`⚠️ ${gap} position${gap !== 1 ? 's' : ''} need${gap === 1 ? 's' : ''} to be filled for this shift`}
                                   >
                                     <span>Unassigned</span>
                                   </div>
