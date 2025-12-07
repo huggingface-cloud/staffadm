@@ -4,10 +4,14 @@ from typing import Optional, List
 from database import get_supabase
 from models import EmployeeDetailed, RosterRequest, RosteringResult
 from rostering_engine import RosteringEngine
+import httpx
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Optimizer API configuration
+OPTIMIZER_API_URL = "http://localhost:9001"
 
 app = FastAPI(
     title="Staff Admin & Rostering API",
@@ -455,6 +459,237 @@ async def get_departments(opco_id: Optional[str] = Query(None)):
 
     except Exception as e:
         logger.error(f"Error fetching departments: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================================================================
+# OPTIMIZER API PROXY ENDPOINTS
+# ======================================================================
+
+@app.post("/api/optimize")
+async def run_optimization(request: dict = Body(...)):
+    """
+    Proxy request to optimizer API.
+
+    Triggers roster optimization for the given date range.
+    Returns job_id for async tracking or immediate results for small datasets.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{OPTIMIZER_API_URL}/optimize",
+                json=request,
+                timeout=300.0  # 5 minutes for optimization
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Optimization request timed out")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Optimizer API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with optimizer: {str(e)}")
+
+
+@app.get("/api/optimizer/jobs/{job_id}")
+async def get_optimization_status(job_id: str):
+    """
+    Get optimization job status.
+
+    Poll this endpoint to check the status of a running optimization job.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{OPTIMIZER_API_URL}/jobs/{job_id}",
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error fetching job status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/optimizer/configs")
+async def get_optimizer_configs():
+    """Get all optimizer configurations from database."""
+    try:
+        supabase = get_supabase()
+        response = supabase.table("optimizer_configs").select("*").order("is_active", desc=True).execute()
+        return response.data or []
+    except Exception as e:
+        logger.error(f"Error fetching optimizer configs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimizer/configs")
+async def create_optimizer_config(config: dict = Body(...)):
+    """Create new optimizer configuration."""
+    try:
+        supabase = get_supabase()
+        response = supabase.table("optimizer_configs").insert(config).execute()
+        return response.data[0] if response.data else None
+    except Exception as e:
+        logger.error(f"Error creating optimizer config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/optimizer/configs/{config_id}")
+async def update_optimizer_config(config_id: str, config: dict = Body(...)):
+    """Update optimizer configuration."""
+    try:
+        supabase = get_supabase()
+        response = supabase.table("optimizer_configs").update(config).eq("id", config_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating optimizer config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/optimizer/configs/{config_id}")
+async def delete_optimizer_config(config_id: str):
+    """Delete optimizer configuration."""
+    try:
+        supabase = get_supabase()
+        response = supabase.table("optimizer_configs").delete().eq("id", config_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        return {"message": "Configuration deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting optimizer config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/roster/view")
+async def get_roster_view(
+    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    end_date: str = Query(..., description="End date in YYYY-MM-DD format"),
+    department_id: Optional[str] = Query(None, description="Filter by department")
+):
+    """
+    Get roster view data showing shifts and assignments for a date range.
+
+    This endpoint fetches shift requirements and their assignments from the database,
+    formatted for the RosterView component.
+    """
+    try:
+        supabase = get_supabase()
+
+        # Fetch shift requirements for the date range
+        shift_query = supabase.table("shift_requirements").select("""
+            id,
+            shift_date,
+            start_time,
+            end_time,
+            required_count,
+            location,
+            roles(id, name),
+            departments(id, name, code)
+        """).gte("shift_date", start_date).lte("shift_date", end_date)
+
+        if department_id:
+            shift_query = shift_query.eq("department_id", department_id)
+
+        shifts_response = shift_query.order("shift_date").order("start_time").execute()
+
+        if not shifts_response.data:
+            return []
+
+        shift_ids = [s["id"] for s in shifts_response.data]
+
+        # Fetch roster assignments for these shifts
+        assignments_response = supabase.table("roster_assignments").select("""
+            id,
+            shift_id,
+            employee_id,
+            employee_weekly_hours,
+            employee_overtime_hours,
+            is_cross_department,
+            employees(id, first_name, last_name, employee_code)
+        """).in_("shift_id", shift_ids).execute()
+
+        # Group assignments by shift_id
+        assignments_by_shift = {}
+        for assignment in assignments_response.data or []:
+            shift_id = assignment["shift_id"]
+            if shift_id not in assignments_by_shift:
+                assignments_by_shift[shift_id] = []
+
+            emp = assignment.get("employees", {})
+            weekly_hours = assignment.get("employee_weekly_hours", 0) or 0
+
+            # Determine status based on hours
+            status = "optimal"
+            warnings = []
+            if weekly_hours > 48:
+                status = "overtime"
+                warnings.append(f"{weekly_hours}h this week (48h limit)")
+            elif weekly_hours > 40:
+                status = "warning"
+                warnings.append(f"{weekly_hours}h this week")
+
+            if assignment.get("is_cross_department"):
+                warnings.append("Cross-department assignment")
+
+            assignments_by_shift[shift_id].append({
+                "id": assignment["id"],
+                "employeeId": emp.get("id"),
+                "employeeName": f"{emp.get('first_name', '')} {emp.get('last_name', '')}".strip(),
+                "employeeCode": emp.get("employee_code"),
+                "weeklyHours": weekly_hours,
+                "status": status,
+                "warnings": warnings if warnings else None
+            })
+
+        # Group shifts by date
+        roster_by_date = {}
+        for shift in shifts_response.data:
+            shift_date = shift["shift_date"]
+            if shift_date not in roster_by_date:
+                roster_by_date[shift_date] = []
+
+            role_name = shift.get("roles", {}).get("name", "Unknown Role")
+            location = shift.get("location", "")
+
+            # Extract time from timestamp
+            start_time = shift["start_time"].split("T")[1][:5] if "T" in shift["start_time"] else "00:00"
+            end_time = shift["end_time"].split("T")[1][:5] if "T" in shift["end_time"] else "00:00"
+
+            roster_by_date[shift_date].append({
+                "id": shift["id"],
+                "name": f"{role_name} Shift",
+                "startTime": start_time,
+                "endTime": end_time,
+                "requiredCount": shift["required_count"],
+                "location": location,
+                "role": role_name,
+                "assignments": assignments_by_shift.get(shift["id"], [])
+            })
+
+        # Convert to array format expected by frontend
+        result = []
+        for date_str in sorted(roster_by_date.keys()):
+            result.append({
+                "date": date_str,
+                "shifts": roster_by_date[date_str]
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error fetching roster view: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
