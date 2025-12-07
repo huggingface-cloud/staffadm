@@ -585,27 +585,45 @@ async def get_roster_view(
     formatted for the RosterView component.
     """
     try:
+        from datetime import datetime, timedelta
         supabase = get_supabase()
 
-        # Fetch shift requirements for the date range
+        # Add time component to make it inclusive
+        start_datetime = f"{start_date}T00:00:00"
+        end_datetime = f"{end_date}T23:59:59"
+
+        # Fetch shift requirements for the date range using start_time
         shift_query = supabase.table("shift_requirements").select("""
             id,
-            shift_date,
             start_time,
             end_time,
-            required_count,
+            headcount_needed,
             location,
-            roles(id, name),
+            required_role_id,
+            department_id,
+            roles!shift_requirements_required_role_id_fkey(id, name),
             departments(id, name, code)
-        """).gte("shift_date", start_date).lte("shift_date", end_date)
+        """).gte("start_time", start_datetime).lte("start_time", end_datetime)
 
         if department_id:
             shift_query = shift_query.eq("department_id", department_id)
 
-        shifts_response = shift_query.order("shift_date").order("start_time").execute()
+        shifts_response = shift_query.order("start_time").execute()
 
         if not shifts_response.data:
-            return []
+            # Return empty schedule for the date range
+            from datetime import datetime, timedelta
+            start = datetime.fromisoformat(start_date)
+            end = datetime.fromisoformat(end_date)
+            result = []
+            current = start
+            while current <= end:
+                result.append({
+                    "date": current.strftime("%Y-%m-%d"),
+                    "shifts": []
+                })
+                current += timedelta(days=1)
+            return result
 
         shift_ids = [s["id"] for s in shifts_response.data]
 
@@ -653,38 +671,54 @@ async def get_roster_view(
                 "warnings": warnings if warnings else None
             })
 
-        # Group shifts by date
+        # Group shifts by date (extract date from start_time)
         roster_by_date = {}
         for shift in shifts_response.data:
-            shift_date = shift["shift_date"]
+            # Extract date from start_time timestamp
+            start_time_str = shift["start_time"]
+            shift_date = start_time_str.split("T")[0]  # Get YYYY-MM-DD part
+
             if shift_date not in roster_by_date:
                 roster_by_date[shift_date] = []
 
-            role_name = shift.get("roles", {}).get("name", "Unknown Role")
+            # Get role name from the nested roles object
+            roles_obj = shift.get("roles")
+            if isinstance(roles_obj, dict):
+                role_name = roles_obj.get("name", "Unknown Role")
+            else:
+                role_name = "Unknown Role"
+
             location = shift.get("location", "")
 
             # Extract time from timestamp
-            start_time = shift["start_time"].split("T")[1][:5] if "T" in shift["start_time"] else "00:00"
-            end_time = shift["end_time"].split("T")[1][:5] if "T" in shift["end_time"] else "00:00"
+            start_time = start_time_str.split("T")[1][:5] if "T" in start_time_str else "00:00"
+            end_time_str = shift["end_time"]
+            end_time = end_time_str.split("T")[1][:5] if "T" in end_time_str else "00:00"
 
             roster_by_date[shift_date].append({
                 "id": shift["id"],
                 "name": f"{role_name} Shift",
                 "startTime": start_time,
                 "endTime": end_time,
-                "requiredCount": shift["required_count"],
+                "requiredCount": shift.get("headcount_needed", 1),
                 "location": location,
                 "role": role_name,
                 "assignments": assignments_by_shift.get(shift["id"], [])
             })
 
-        # Convert to array format expected by frontend
+        # Convert to array format expected by frontend, filling in missing dates
+        from datetime import datetime, timedelta
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
         result = []
-        for date_str in sorted(roster_by_date.keys()):
+        current = start
+        while current <= end:
+            date_str = current.strftime("%Y-%m-%d")
             result.append({
                 "date": date_str,
-                "shifts": roster_by_date[date_str]
+                "shifts": roster_by_date.get(date_str, [])
             })
+            current += timedelta(days=1)
 
         return result
 
