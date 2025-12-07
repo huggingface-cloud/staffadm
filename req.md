@@ -17,6 +17,8 @@ Comments - Further detail for planner / resources
 Department
 Department details
 Role (enum defined list)
+Role has a maximum continuos duration
+Role has minimum off time
 Role mapped to qualifications (as necessary to perform role)
 Role Minimum Skills - Must have to fulfil a role (Used when shortage of labour)
 Role Recommended Skills - Ideal to perform the role optimally
