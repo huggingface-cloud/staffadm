@@ -114,7 +114,8 @@ def load_data_from_supabase(employees_data: List[dict], shifts_data: List[dict])
             'end_time': end_time,
             'week_number': start_time.isocalendar()[1],
             'day_of_week': start_time.weekday(),
-            'date_str': start_time.strftime('%Y-%m-%d')
+            'date_str': start_time.strftime('%Y-%m-%d'),
+            'headcount_needed': shift_data.get('headcount_needed', 1)  # Number of people needed for this shift
         }
 
     return employees, shifts, employee_quals, employee_absences, employee_anomalies
@@ -299,12 +300,13 @@ class RosterOptimizer:
         """Add hard constraints using precomputed structures."""
         hc = CONFIG["HARD_CONSTRAINTS"]
 
-        # 1. At most one employee per shift
+        # 1. At most headcount_needed employees per shift
         for j in self.shift_ids:
             vars_for_shift = [self.assignment_vars[(i, j)] for i in self.employee_ids
                             if (i, j) in self.assignment_vars]
             if vars_for_shift:
-                self.model += pulp.lpSum(vars_for_shift) <= 1, f"Shift_{j}_MaxOne"
+                headcount = self.shifts[j].get('headcount_needed', 1)
+                self.model += pulp.lpSum(vars_for_shift) <= headcount, f"Shift_{j}_MaxHeadcount"
 
         # 2. Rest constraints (vectorized with precomputed pairs)
         for i in self.employee_ids:
