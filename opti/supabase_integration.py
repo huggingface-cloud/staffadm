@@ -44,24 +44,13 @@ class SupabaseRosterService:
             {'department': 'Ground_Operations'}
             {'active': True}
         """
+        # Simplified query - fetch only what we need without nested joins
         query = self.client.table('employees').select('''
             id,
-            role,
-            max_hours_week,
-            department,
-            qualifications:employee_qualifications(
-                qual_id,
-                expiry_date
-            ),
-            absences:employee_absences(
-                start_date,
-                end_date
-            ),
-            anomalies:employee_anomalies(
-                restricted_roles,
-                start_date,
-                end_date
-            )
+            first_name,
+            last_name,
+            active_for_rostering,
+            department_id
         ''')
 
         if filters:
@@ -80,13 +69,15 @@ class SupabaseRosterService:
             end_date: End date in 'YYYY-MM-DD' format
             filters: Additional filters like {'department': 'Ground_Operations'}
         """
+        # Simplified query matching actual schema
         query = self.client.table('shift_requirements').select('''
             id,
-            role,
-            duration_hours,
             start_time,
-            department,
-            priority
+            end_time,
+            headcount_needed,
+            required_role_id,
+            department_id,
+            location
         ''').gte('start_time', start_date).lte('start_time', end_date)
 
         if filters:

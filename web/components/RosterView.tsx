@@ -57,7 +57,11 @@ const getShiftStatusColor = (shift: Shift) => {
 }
 
 export default function RosterView() {
-  const [currentDate, setCurrentDate] = useState(new Date())
+  // Initialize to start of current week (Monday)
+  const [currentDate, setCurrentDate] = useState(() => {
+    const today = new Date()
+    return startOfWeek(today, { weekStartsOn: 1 })
+  })
   const [viewMode, setViewMode] = useState<ViewMode>('week')
   const [scheduleData, setScheduleData] = useState<DaySchedule[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -89,7 +93,10 @@ export default function RosterView() {
     }
   }
 
-  const goToToday = () => setCurrentDate(new Date())
+  const goToToday = () => {
+    const today = new Date()
+    setCurrentDate(startOfWeek(today, { weekStartsOn: 1 }))
+  }
 
   const { start, end } = getDateRange()
 
