@@ -18,6 +18,19 @@ export default function Home() {
   const { isAuthenticated, isLoading, user, logout } = useAuth()
   const router = useRouter()
 
+  // Load saved tab from localStorage on mount
+  useEffect(() => {
+    const savedTab = localStorage.getItem('activeTab')
+    if (savedTab && ['schedule', 'dashboard', 'hours', 'forecast', 'employees', 'settings', 'admin'].includes(savedTab)) {
+      setActiveTab(savedTab as Tab)
+    }
+  }, [])
+
+  // Save active tab to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab)
+  }, [activeTab])
+
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -43,78 +56,91 @@ export default function Home() {
   }
 
   const tabs = [
-    { id: 'schedule' as Tab, label: '📅 Schedule View' },
-    { id: 'dashboard' as Tab, label: '📊 Dashboard' },
-    { id: 'hours' as Tab, label: '⏱️ Hours Tracking' },
-    { id: 'forecast' as Tab, label: '📈 Forecast & Gaps' },
-    { id: 'employees' as Tab, label: '👥 Employees' },
-    { id: 'admin' as Tab, label: '⚡ Admin Panel' },
-    { id: 'settings' as Tab, label: '⚙️ Optimizer Settings' },
+    { id: 'schedule' as Tab, label: 'Schedule', icon: '📅' },
+    { id: 'dashboard' as Tab, label: 'Dashboard', icon: '📊' },
+    { id: 'hours' as Tab, label: 'Hours', icon: '⏱️' },
+    { id: 'forecast' as Tab, label: 'Forecast', icon: '📈' },
+    { id: 'employees' as Tab, label: 'Employees', icon: '👥' },
+    { id: 'admin' as Tab, label: 'Admin', icon: '⚡' },
+    { id: 'settings' as Tab, label: 'Settings', icon: '⚙️' },
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50">
+      {/* Modern Header with Glassmorphism Effect */}
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="py-6 flex justify-between items-center">
+          <div className="py-4 flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                Staff Admin & Rostering System
+              <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
+                Staff Admin
               </h1>
-              <p className="mt-2 text-sm text-gray-600">
-                Comprehensive staff management and scheduling
+              <p className="mt-0.5 text-xs text-gray-500">
+                Workforce management system
               </p>
             </div>
-            <div className="flex items-center gap-4">
-              <div className="text-right">
+            <div className="flex items-center gap-3">
+              <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100">
                 <p className="text-sm font-medium text-gray-900">{user?.full_name}</p>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-600">
                   {user?.role === 'super_admin' ? 'Super Admin' : 'Department Admin'}
                 </p>
               </div>
               <button
                 onClick={logout}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-all duration-200 border border-red-200 hover:border-red-300"
               >
-                Logout
+                Sign Out
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      <nav className="bg-white border-b border-gray-200">
+      {/* Modern Tab Navigation with Pill Design */}
+      <nav className="bg-white/60 backdrop-blur-lg border-b border-gray-200/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-4 overflow-x-auto py-3">
+          <div className="flex space-x-2 overflow-x-auto py-4 scrollbar-hide">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`
-                  px-4 py-2 text-sm font-medium rounded-md whitespace-nowrap
-                  transition-colors duration-150
+                  group relative px-5 py-2.5 text-sm font-medium rounded-xl whitespace-nowrap
+                  transition-all duration-300 ease-out
                   ${
                     activeTab === tab.id
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-700 hover:bg-gray-100'
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30 scale-105'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-white/80 hover:shadow-md'
                   }
                 `}
               >
-                {tab.label}
+                <span className="flex items-center gap-2">
+                  <span className={`text-base ${activeTab === tab.id ? 'scale-110' : 'opacity-70 group-hover:opacity-100'} transition-all`}>
+                    {tab.icon}
+                  </span>
+                  <span>{tab.label}</span>
+                </span>
+                {activeTab === tab.id && (
+                  <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-blue-600 rounded-full" />
+                )}
               </button>
             ))}
           </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'schedule' && <RosterView />}
-        {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'hours' && <EmployeeHours />}
-        {activeTab === 'forecast' && <Forecast />}
-        {activeTab === 'employees' && <Employees />}
-        {activeTab === 'admin' && <AdminPanel />}
-        {activeTab === 'settings' && <OptimizerSettings />}
+      {/* Content Area with Smooth Transitions */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="animate-fadeIn">
+          {activeTab === 'schedule' && <RosterView />}
+          {activeTab === 'dashboard' && <Dashboard />}
+          {activeTab === 'hours' && <EmployeeHours />}
+          {activeTab === 'forecast' && <Forecast />}
+          {activeTab === 'employees' && <Employees />}
+          {activeTab === 'admin' && <AdminPanel />}
+          {activeTab === 'settings' && <OptimizerSettings />}
+        </div>
       </main>
     </div>
   )
