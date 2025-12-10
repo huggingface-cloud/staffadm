@@ -50,8 +50,13 @@ class OptimizationRequest(BaseModel):
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     department_filter: Optional[str] = Field(None, description="Filter by department")
     user_id: Optional[str] = Field(None, description="User ID for audit trail")
+    admin_user_id: Optional[str] = Field(None, description="Admin user ID (takes precedence over user_id)")
     description: Optional[str] = Field(None, description="Description of optimization run")
     save_results: bool = Field(False, description="Whether to save results to database (requires optimization_runs table)")
+    employee_filters: Optional[Dict] = Field(None, description="Additional employee filters")
+    shift_filters: Optional[Dict] = Field(None, description="Additional shift filters")
+    fetch_existing_hours: bool = Field(False, description="Fetch existing hours across all departments for cross-dept validation")
+    department_id: Optional[str] = Field(None, description="Department ID for department-specific optimization")
 
 class OptimizationResponse(BaseModel):
     job_id: Optional[str]
@@ -100,12 +105,17 @@ async def optimize_roster(request: OptimizationRequest, background_tasks: Backgr
     try:
         logger.info(f"Optimization request: {request.start_date} to {request.end_date}")
 
-        # Build filters
-        employee_filters = {}
-        shift_filters = {}
+        # Build filters - merge provided filters with department_filter (legacy support)
+        employee_filters = request.employee_filters or {}
+        shift_filters = request.shift_filters or {}
+
+        # Legacy support: map department_filter to filters
         if request.department_filter:
             employee_filters['department'] = request.department_filter
             shift_filters['department'] = request.department_filter
+
+        # Use admin_user_id if provided, otherwise fallback to user_id
+        user_id = request.admin_user_id or request.user_id
 
         # Estimate dataset size
         employees = supabase_service.fetch_employees(employee_filters)
@@ -116,6 +126,8 @@ async def optimize_roster(request: OptimizationRequest, background_tasks: Backgr
         )
 
         logger.info(f"Dataset size: {len(employees)} employees, {len(shifts)} shifts")
+        if request.fetch_existing_hours:
+            logger.info("Cross-department hours validation enabled")
 
         # Decide whether to run immediately or queue
         # Threshold: <500 employees and <2000 shifts = run immediately
@@ -127,10 +139,12 @@ async def optimize_roster(request: OptimizationRequest, background_tasks: Backgr
                 result = supabase_service.optimize_and_save(
                     request.start_date,
                     request.end_date,
-                    user_id=request.user_id,
+                    user_id=user_id,
                     description=request.description,
                     employee_filters=employee_filters,
-                    shift_filters=shift_filters
+                    shift_filters=shift_filters,
+                    department_id=request.department_id,
+                    fetch_existing_hours=request.fetch_existing_hours
                 )
                 job_id = result.get('optimization_run_id')
             else:
@@ -138,7 +152,9 @@ async def optimize_roster(request: OptimizationRequest, background_tasks: Backgr
                     request.start_date,
                     request.end_date,
                     employee_filters=employee_filters,
-                    shift_filters=shift_filters
+                    shift_filters=shift_filters,
+                    department_id=request.department_id,
+                    fetch_existing_hours=request.fetch_existing_hours
                 )
                 job_id = None
 

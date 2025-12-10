@@ -24,10 +24,11 @@ CONFIG = {
         "MAX_SHIFT_DURATION_HOURS": 14,
         "MAX_CONSECUTIVE_SHIFTS": 5,
         "MAX_WORK_DAYS_PER_WEEK": 6,
+        "MAX_HOURS_PER_DAY": 10,  # Maximum total hours per day (allows multiple shifts if total <= 10h)
         "QUAL_EXPIRY_THRESHOLD_DAYS": 90
     },
     "SOFT_PENALTIES": {
-        "COVERAGE_WEIGHT": 1000,
+        "COVERAGE_WEIGHT": 10000,  # Highest priority - coverage is critical
         "CROSS_DEPT_PENALTY": 100,
         "FAIRNESS_PENALTY_PER_HOUR": 10,
         "OVERTIME_PENALTY_PER_HOUR": 50
@@ -70,11 +71,22 @@ def load_data_from_supabase(employees_data: List[dict], shifts_data: List[dict])
         emp_id = emp_data['id']
         dept_id = emp_data.get('department_id', 'UNKNOWN')
 
+        # Extract weekly_hours_limit from active contract (default to 40 if not present)
+        contracts = emp_data.get('contracts', [])
+        weekly_hours_limit = 40  # Default
+        if contracts and len(contracts) > 0:
+            # Take the first active contract (supabase query already filters for is_active=True)
+            weekly_hours_limit = contracts[0].get('weekly_hours_limit', 40)
+
         employees[emp_id] = {
             'role_id': dept_id,  # Using department as role for now
             'dept_id': dept_id,
-            'max_hours_week': 40  # Default to 40 hours
+            'max_hours_week': weekly_hours_limit
         }
+
+        # DEBUG: Log first 3 employees to verify contract loading
+        if len(employees) <= 3:
+            print(f"DEBUG: Employee {emp_id[:8]} max_hours_week = {weekly_hours_limit}h")
 
         # Qualifications - skipped for now as we don't have this data
         employee_quals[emp_id] = {}
@@ -131,12 +143,14 @@ class RosterOptimizer:
     """
 
     def __init__(self, employees, shifts, employee_quals, employee_absences,
-                 employee_anomalies, name="RosterOptimizer"):
+                 employee_anomalies, name="RosterOptimizer",
+                 employee_existing_hours: Optional[Dict[str, float]] = None):
         self.employees = employees
         self.shifts = shifts
         self.employee_quals = employee_quals
         self.employee_absences = employee_absences
         self.employee_anomalies = employee_anomalies
+        self.employee_existing_hours = employee_existing_hours or {}
 
         self.employee_ids = list(employees.keys())
         self.shift_ids = list(shifts.keys())
@@ -317,7 +331,24 @@ class RosterOptimizer:
                         f"Rest_{i}_{j1}_{j2}"
                     )
 
-        # 3. Link assignments to work-day variables
+        # 3. CRITICAL: Max daily hours per employee (prevents unreasonable workdays)
+        # Employees can work multiple shifts per day, but total hours cannot exceed MAX_HOURS_PER_DAY
+        # Example: 3x 2-hour shifts (6h total) = OK, but 2x 8-hour shifts (16h total) = NOT OK
+        MAX_HOURS_PER_DAY = hc.get("MAX_HOURS_PER_DAY", 10)  # Default 10 hours per day
+        for date_str in self.unique_dates:
+            shifts_on_date = self.shifts_by_date.get(date_str, [])
+            for i in self.employee_ids:
+                # Get all shifts this employee could work on this date
+                eligible_shifts = [j for j in shifts_on_date if (i, j) in self.assignment_vars]
+                if eligible_shifts:
+                    # Sum total hours for all shifts assigned to this employee on this day
+                    daily_hours = pulp.lpSum(
+                        self.assignment_vars[(i, j)] * self.shifts[j]['duration_hours']
+                        for j in eligible_shifts
+                    )
+                    self.model += daily_hours <= MAX_HOURS_PER_DAY, f"MaxDailyHrs_{i}_{date_str}"
+
+        # 4. Link assignments to work-day variables
         for (i, date_str), wvar in self.work_day_vars.items():
             j_list = [j for j in self.shifts_by_date[date_str] if (i, j) in self.assignment_vars]
             if not j_list:
@@ -329,7 +360,7 @@ class RosterOptimizer:
             self.model += assignments_sum <= M * wvar, f"LinkUp_{i}_{date_str}"
             self.model += assignments_sum >= wvar, f"LinkDown_{i}_{date_str}"
 
-        # 4. Max work days per week
+        # 5. Max work days per week
         max_days = hc["MAX_WORK_DAYS_PER_WEEK"]
         for i in self.employee_ids:
             for w in self.weeks:
@@ -340,7 +371,7 @@ class RosterOptimizer:
                 if workday_vars:
                     self.model += pulp.lpSum(workday_vars) <= max_days, f"MaxDays_{i}_W{w}"
 
-        # 5. Max consecutive shifts (sliding window)
+        # 6. Max consecutive shifts (sliding window)
         max_consec = hc["MAX_CONSECUTIVE_SHIFTS"]
         if len(self.unique_dates) >= max_consec + 1:
             for i in self.employee_ids:
@@ -351,6 +382,51 @@ class RosterOptimizer:
                     if window_vars:
                         self.model += pulp.lpSum(window_vars) <= max_consec, \
                                     f"Consec_{i}_{window[0]}"
+
+        # 7. HARD CONSTRAINT: Weekly hours cannot exceed 120% of max_hours_week
+        # This enforces that employees cannot be assigned more than 120% of their
+        # contracted weekly hours (max 20% overtime as specified by user)
+        # CROSS-DEPARTMENT SUPPORT: If employee_existing_hours is provided, this
+        # subtracts existing hours from other departments before applying the limit
+        for w in self.weeks:
+            week_shifts = self.shifts_by_week.get(w, [])
+            if not week_shifts:
+                continue
+
+            for i in self.employee_ids:
+                # Only create constraint for shifts this employee is eligible for
+                eligible_shifts = [j for j in week_shifts if (i, j) in self.assignment_vars]
+                if not eligible_shifts:
+                    continue
+
+                max_hours = self.employees[i]['max_hours_week']
+                absolute_max_hours = max_hours * 1.2  # 120% limit
+
+                # Get existing hours from other departments (if provided)
+                existing_hours = self.employee_existing_hours.get(i, 0.0)
+
+                hours_assigned = pulp.lpSum(
+                    self.assignment_vars[(i, j)] * self.shifts[j]['duration_hours']
+                    for j in eligible_shifts
+                )
+
+                # NEW hours assigned + EXISTING hours must not exceed limit
+                self.model += hours_assigned + existing_hours <= absolute_max_hours, \
+                            f"MaxWeekHrs_{i}_W{w}"
+
+        # DEBUG: Log constraint creation summary
+        print(f"\nDEBUG: Created weekly hours constraints for {len(self.employees)} employees")
+        if self.employee_existing_hours:
+            print(f"  Cross-department mode: {len(self.employee_existing_hours)} employees have existing hours")
+        # Sample first 3 employees
+        for idx, (emp_id, emp_data) in enumerate(list(self.employees.items())[:3]):
+            max_h = emp_data['max_hours_week']
+            limit = max_h * 1.2
+            existing = self.employee_existing_hours.get(emp_id, 0.0)
+            if existing > 0:
+                print(f"  Employee {emp_id[:8]}: max {max_h}h/week, limit {limit}h (120%), existing {existing}h from other depts")
+            else:
+                print(f"  Employee {emp_id[:8]}: max {max_h}h/week, hard limit {limit}h (120%)")
 
     # ======================================================================
     # SOFT CONSTRAINTS
@@ -374,7 +450,7 @@ class RosterOptimizer:
                     for j in shift_list
                 )
 
-                # Overtime
+                # Overtime (soft constraint with penalty between max_hours and 120%)
                 self.model += hours_assigned - max_hours <= self.overtime_vars[(i, w)], \
                             f"OT_{i}_W{w}"
 
@@ -486,13 +562,20 @@ class RosterOptimizer:
 # SUPABASE INTEGRATION WRAPPER
 # ======================================================================
 
-def optimize_roster_from_supabase(employees_data: List[dict], shifts_data: List[dict]) -> dict:
+def optimize_roster_from_supabase(
+    employees_data: List[dict],
+    shifts_data: List[dict],
+    employee_existing_hours: Optional[Dict[str, float]] = None
+) -> dict:
     """
     Main entry point for Supabase integration.
 
     Args:
         employees_data: List of employee dicts from Supabase query
         shifts_data: List of shift requirement dicts from Supabase query
+        employee_existing_hours: Optional dict mapping employee_id -> hours already
+                                 assigned across ALL departments in this period.
+                                 Used to enforce global weekly hour limits.
 
     Returns:
         dict with roster assignments and statistics
@@ -506,7 +589,8 @@ def optimize_roster_from_supabase(employees_data: List[dict], shifts_data: List[
     optimizer = RosterOptimizer(
         employees, shifts, employee_quals,
         employee_absences, employee_anomalies,
-        name="SupabaseOptimization"
+        name="SupabaseOptimization",
+        employee_existing_hours=employee_existing_hours
     )
 
     results = optimizer.solve()
