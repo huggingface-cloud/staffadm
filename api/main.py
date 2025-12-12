@@ -8,6 +8,7 @@ from models import EmployeeDetailed, RosterRequest, RosteringResult
 from rostering_engine import RosteringEngine
 from auth import authenticate_user, create_access_token, AuthenticationError, get_user_by_id
 from auth_middleware import get_current_user, get_current_super_admin, apply_department_filter
+from cache_manager import cached, invalidate_cache
 import httpx
 import logging
 
@@ -146,13 +147,14 @@ async def logout(current_user: dict = Depends(get_current_user)):
 # ======================================================================
 
 @app.get("/api/employees", response_model=List[dict])
+@cached(ttl=300, prefix="employees")  # Cache for 5 minutes
 async def get_employees(
     opco_id: Optional[str] = Query(None),
     department_id: Optional[str] = Query(None),
     active_for_rostering: Optional[bool] = Query(None)
 ):
     """
-    Get all employees with their core details, active qualifications, and anomalies.
+    Get all employees with their core details, active qualifications, and anomalies (5-minute cache).
 
     - **opco_id**: Filter by operating company
     - **department_id**: Filter by department
@@ -576,12 +578,13 @@ async def assign_roster(request: RosterRequest = Body(...)):
 
 
 @app.get("/api/shifts")
+@cached(ttl=180, prefix="shifts")  # Cache for 3 minutes
 async def get_shifts(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     department_id: Optional[str] = Query(None)
 ):
-    """Get shift requirements."""
+    """Get shift requirements (3-minute cache)."""
     try:
         supabase = get_supabase()
 
@@ -652,19 +655,30 @@ async def get_qualification_types():
 
 
 @app.get("/api/departments")
-async def get_departments(opco_id: Optional[str] = Query(None)):
-    """Get departments with roles."""
+@cached(ttl=600, prefix="departments")  # Cache for 10 minutes
+async def get_departments(
+    current_user: dict = Depends(get_current_user),
+    opco_id: Optional[str] = Query(None)
+):
+    """
+    Get departments (with 10-minute cache).
+    - Super Admin: See all departments
+    - Dept Admin: See only their department
+    """
     try:
         supabase = get_supabase()
 
-        query = supabase.table("departments").select("""
-            *,
-            operating_companies(name, code),
-            employee_roles(id, role_name, description)
-        """)
+        query = supabase.table("departments").select("id, name, code")
 
+        # Department admins can only see their own department
+        if current_user['role'] == 'dept_admin' and current_user.get('department_id'):
+            query = query.eq("id", current_user['department_id'])
+
+        # Filter by opco if provided
         if opco_id:
             query = query.eq("opco_id", opco_id)
+
+        query = query.order("name")
 
         response = query.execute()
         return response.data or []
@@ -1052,6 +1066,9 @@ async def create_employee(employee: dict = Body(...)):
         # Add employee_code for response
         emp_response.data[0]["employee_code"] = f"EMP-{emp_id[:8]}"
 
+        # Invalidate employee cache
+        invalidate_cache("employees")
+
         return emp_response.data[0]
     except Exception as e:
         logger.error(f"Error creating employee: {e}")
@@ -1067,6 +1084,8 @@ async def delete_employee(employee_id: str):
         supabase.table("employee_roles").delete().eq("employee_id", employee_id).execute()
         # Delete employee
         response = supabase.table("employees").delete().eq("id", employee_id).execute()
+        # Invalidate employee cache
+        invalidate_cache("employees")
         return {"success": True}
     except Exception as e:
         logger.error(f"Error deleting employee: {e}")
@@ -1098,8 +1117,10 @@ async def create_shift(shift: dict = Body(...)):
             shift["start_time"] += "+00:00"
         if "T" in shift["end_time"] and "+" not in shift["end_time"]:
             shift["end_time"] += "+00:00"
-        
+
         response = supabase.table("shift_requirements").insert(shift).execute()
+        # Invalidate shift cache
+        invalidate_cache("shifts")
         return response.data[0]
     except Exception as e:
         logger.error(f"Error creating shift: {e}")
@@ -1112,6 +1133,8 @@ async def delete_shift(shift_id: str):
     try:
         supabase = get_supabase()
         response = supabase.table("shift_requirements").delete().eq("id", shift_id).execute()
+        # Invalidate shift cache
+        invalidate_cache("shifts")
         return {"success": True}
     except Exception as e:
         logger.error(f"Error deleting shift: {e}")

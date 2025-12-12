@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { format, addDays, startOfWeek, endOfWeek, addWeeks, subWeeks, startOfMonth, endOfMonth, addMonths, subMonths, eachDayOfInterval, isSameDay, parseISO } from 'date-fns'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { format, addDays, startOfWeek, endOfWeek, addWeeks, subWeeks, startOfMonth, endOfMonth, addMonths, subMonths, eachDayOfInterval, isSameDay, isToday, isPast, isFuture } from 'date-fns'
 
 type ViewMode = 'day' | 'week' | 'month'
+type ZoomLevel = 'compact' | 'normal' | 'comfortable'
 
 type AssignmentStatus = 'assigned' | 'unassigned' | 'overtime' | 'warning' | 'optimal'
 
@@ -36,44 +37,59 @@ interface DaySchedule {
 const getStatusColor = (status: AssignmentStatus) => {
   switch (status) {
     case 'optimal':
-      return 'bg-green-100 text-green-800 border-green-200'
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-1 ring-emerald-200'
     case 'assigned':
-      return 'bg-blue-100 text-blue-800 border-blue-200'
+      return 'bg-blue-50 text-blue-700 border-blue-200 ring-1 ring-blue-200'
     case 'warning':
-      return 'bg-yellow-100 text-yellow-800 border-yellow-200'
+      return 'bg-amber-50 text-amber-700 border-amber-200 ring-1 ring-amber-200'
     case 'overtime':
-      return 'bg-red-100 text-red-800 border-red-200'
+      return 'bg-red-50 text-red-700 border-red-200 ring-1 ring-red-200'
     case 'unassigned':
-      return 'bg-gray-100 text-gray-600 border-gray-200'
+      return 'bg-gray-50 text-gray-500 border-gray-200'
   }
 }
 
-const getShiftStatusColor = (shift: Shift) => {
+const getShiftStatusBorder = (shift: Shift) => {
   const gap = shift.requiredCount - shift.assignments.length
-  if (gap > 0) return 'border-l-4 border-l-red-500 bg-red-50'
-  if (shift.assignments.some(a => a.status === 'overtime')) return 'border-l-4 border-l-orange-500 bg-orange-50'
-  if (shift.assignments.some(a => a.status === 'warning')) return 'border-l-4 border-l-yellow-500 bg-yellow-50'
-  return 'border-l-4 border-l-green-500 bg-green-50'
+  if (gap > 0) return 'border-l-4 border-l-red-500'
+  if (shift.assignments.some(a => a.status === 'overtime')) return 'border-l-4 border-l-orange-500'
+  if (shift.assignments.some(a => a.status === 'warning')) return 'border-l-4 border-l-amber-500'
+  return 'border-l-4 border-l-emerald-500'
 }
 
 export default function RosterView() {
-  // Initialize to start of current week (Monday)
-  const [currentDate, setCurrentDate] = useState(() => {
-    const today = new Date()
-    return startOfWeek(today, { weekStartsOn: 1 })
-  })
+  // Always default to today
+  const [currentDate, setCurrentDate] = useState(() => new Date())
   const [viewMode, setViewMode] = useState<ViewMode>('week')
+  const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('normal')
   const [scheduleData, setScheduleData] = useState<DaySchedule[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isOptimizing, setIsOptimizing] = useState(false)
+  const [loadedDateRanges, setLoadedDateRanges] = useState<Set<string>>(new Set())
+  const [showOptimizerModal, setShowOptimizerModal] = useState(false)
+  const [optimizeWindow, setOptimizeWindow] = useState<'day' | 'week' | 'month' | '3months' | '6months' | 'custom'>('week')
+  const [customOptimizeStart, setCustomOptimizeStart] = useState('')
+  const [customOptimizeEnd, setCustomOptimizeEnd] = useState('')
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const observerRef = useRef<IntersectionObserver | null>(null)
+
+  // Reset to today on component mount/refresh
+  useEffect(() => {
+    setCurrentDate(new Date())
+  }, [])
 
   const getDateRange = () => {
+    const today = new Date()
     switch (viewMode) {
       case 'day':
         return { start: currentDate, end: currentDate }
       case 'week':
-        return { start: startOfWeek(currentDate, { weekStartsOn: 1 }), end: endOfWeek(currentDate, { weekStartsOn: 1 }) }
+        return {
+          start: startOfWeek(currentDate, { weekStartsOn: 1 }),
+          end: endOfWeek(currentDate, { weekStartsOn: 1 })
+        }
       case 'month':
         return { start: startOfMonth(currentDate), end: endOfMonth(currentDate) }
     }
@@ -94,70 +110,113 @@ export default function RosterView() {
   }
 
   const goToToday = () => {
-    const today = new Date()
-    setCurrentDate(startOfWeek(today, { weekStartsOn: 1 }))
+    setCurrentDate(new Date())
   }
 
   const { start, end } = getDateRange()
-
-  // Convert to stable string keys for useEffect dependency
   const startDate = format(start, 'yyyy-MM-dd')
   const endDate = format(end, 'yyyy-MM-dd')
 
-  // Fetch roster data from API
-  useEffect(() => {
-    const fetchRosterData = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        const response = await fetch(
-          `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
-        )
+  // Lazy load data for date range
+  const loadDateRange = useCallback(async (start: string, end: string) => {
+    const rangeKey = `${start}_${end}`
+    if (loadedDateRanges.has(rangeKey)) return
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch roster data: ${response.statusText}`)
-        }
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(
+        `http://localhost:8001/api/roster/view?start_date=${start}&end_date=${end}`
+      )
 
-        const data = await response.json()
-
-        // If no data, create empty schedule for date range
-        if (!data || data.length === 0) {
-          const emptySchedule = eachDayOfInterval({ start, end }).map(date => ({
-            date: format(date, 'yyyy-MM-dd'),
-            shifts: []
-          }))
-          setScheduleData(emptySchedule)
-        } else {
-          setScheduleData(data)
-        }
-      } catch (err) {
-        console.error('Error fetching roster data:', err)
-        setError(err instanceof Error ? err.message : 'Failed to load roster data')
-        // Set empty data on error
-        const emptySchedule = eachDayOfInterval({ start, end }).map(date => ({
-          date: format(date, 'yyyy-MM-dd'),
-          shifts: []
-        }))
-        setScheduleData(emptySchedule)
-      } finally {
-        setIsLoading(false)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch roster data: ${response.statusText}`)
       }
+
+      const data = await response.json()
+      setScheduleData(prev => {
+        const newData = [...prev, ...(data || [])]
+        // Remove duplicates based on date
+        const unique = newData.reduce((acc, curr) => {
+          if (!acc.find((item: DaySchedule) => item.date === curr.date)) {
+            acc.push(curr)
+          }
+          return acc
+        }, [] as DaySchedule[])
+        return unique.sort((a: DaySchedule, b: DaySchedule) => a.date.localeCompare(b.date))
+      })
+      setLoadedDateRanges(prev => new Set([...prev, rangeKey]))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch data')
+      // Create empty schedule on error
+      const days = eachDayOfInterval({ start: new Date(start), end: new Date(end) })
+      const emptySchedule = days.map(day => ({
+        date: format(day, 'yyyy-MM-dd'),
+        shifts: []
+      }))
+      setScheduleData(emptySchedule)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [loadedDateRanges])
+
+  // Load current view data
+  useEffect(() => {
+    loadDateRange(startDate, endDate)
+  }, [startDate, endDate, loadDateRange])
+
+  const getOptimizationDateRange = () => {
+    const today = new Date()
+    let start, end
+
+    switch (optimizeWindow) {
+      case 'day':
+        start = format(currentDate, 'yyyy-MM-dd')
+        end = format(currentDate, 'yyyy-MM-dd')
+        break
+      case 'week':
+        start = format(startOfWeek(currentDate, { weekStartsOn: 1 }), 'yyyy-MM-dd')
+        end = format(endOfWeek(currentDate, { weekStartsOn: 1 }), 'yyyy-MM-dd')
+        break
+      case 'month':
+        start = format(startOfMonth(currentDate), 'yyyy-MM-dd')
+        end = format(endOfMonth(currentDate), 'yyyy-MM-dd')
+        break
+      case '3months':
+        start = format(startOfMonth(currentDate), 'yyyy-MM-dd')
+        end = format(endOfMonth(addMonths(currentDate, 2)), 'yyyy-MM-dd')
+        break
+      case '6months':
+        start = format(startOfMonth(currentDate), 'yyyy-MM-dd')
+        end = format(endOfMonth(addMonths(currentDate, 5)), 'yyyy-MM-dd')
+        break
+      case 'custom':
+        start = customOptimizeStart
+        end = customOptimizeEnd
+        break
+      default:
+        start = startDate
+        end = endDate
     }
 
-    fetchRosterData()
-  }, [startDate, endDate])
+    return { start, end }
+  }
 
   const runOptimization = async () => {
     setIsOptimizing(true)
     setError(null)
+    setShowOptimizerModal(false)
+
+    const { start, end } = getOptimizationDateRange()
+
     try {
       const response = await fetch('http://localhost:8001/api/optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          start_date: startDate,
-          end_date: endDate,
-          save_results: false  // Set to true after optimization_runs table is created
+          start_date: start,
+          end_date: end,
+          save_results: true
         })
       })
 
@@ -167,16 +226,21 @@ export default function RosterView() {
 
       const result = await response.json()
 
-      if (result.status === 'completed') {
-        // Reload roster data by refetching with same date range
-        const rosterResponse = await fetch(
-          `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
-        )
-        const data = await rosterResponse.json()
-        setScheduleData(data || [])
-      } else if (result.job_id) {
-        // TODO: Implement job polling for async optimization
-        alert(`Optimization job started: ${result.job_id}. Please refresh to see results.`)
+      // Reload data regardless of status
+      const rosterResponse = await fetch(
+        `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
+      )
+      const data = await rosterResponse.json()
+      setScheduleData(data || [])
+
+      // Clear loaded ranges to force reload
+      setLoadedDateRanges(new Set())
+
+      if (result.status === 'Optimal') {
+        // Show success message
+        const successMsg = `✅ Optimization complete! ${result.statistics?.total_hours || 0}h scheduled`
+        setError(successMsg)
+        setTimeout(() => setError(null), 5000)
       }
     } catch (err) {
       console.error('Optimization error:', err)
@@ -205,308 +269,570 @@ export default function RosterView() {
       })
     })
 
-    return { totalShifts, totalAssignments, totalRequired, overtimeCount, unassignedCount }
+    const coveragePercent = totalRequired > 0 ? Math.round((totalAssignments / totalRequired) * 100) : 0
+
+    return { totalShifts, totalAssignments, totalRequired, overtimeCount, unassignedCount, coveragePercent }
   }
 
   const stats = getTotalStats()
 
+  // Zoom level styles
+  const getZoomStyles = () => {
+    switch (zoomLevel) {
+      case 'compact':
+        return {
+          cardPadding: 'p-2',
+          textSize: 'text-xs',
+          titleSize: 'text-sm',
+          badgeSize: 'text-[10px] px-1.5 py-0.5',
+          spacing: 'space-y-1',
+          gap: 'gap-1'
+        }
+      case 'comfortable':
+        return {
+          cardPadding: 'p-6',
+          textSize: 'text-base',
+          titleSize: 'text-xl',
+          badgeSize: 'text-sm px-4 py-2',
+          spacing: 'space-y-3',
+          gap: 'gap-3'
+        }
+      default: // normal
+        return {
+          cardPadding: 'p-4',
+          textSize: 'text-sm',
+          titleSize: 'text-base',
+          badgeSize: 'text-xs px-2 py-1',
+          spacing: 'space-y-2',
+          gap: 'gap-2'
+        }
+    }
+  }
+
+  const zoomStyles = getZoomStyles()
+
+  // Auto-adjust zoom based on content density
+  useEffect(() => {
+    const totalItems = scheduleData.reduce((sum, day) => sum + day.shifts.length, 0)
+    if (totalItems > 50) {
+      setZoomLevel('compact')
+    } else if (totalItems < 10) {
+      setZoomLevel('comfortable')
+    } else {
+      setZoomLevel('normal')
+    }
+  }, [scheduleData])
+
+  const days = eachDayOfInterval({ start, end })
+
   return (
-    <div className="space-y-4">
-      {/* Header with Navigation */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">Roster Schedule</h2>
-            <p className="text-sm text-gray-600 mt-1">
-              {viewMode === 'day' && format(currentDate, 'EEEE, MMMM d, yyyy')}
-              {viewMode === 'week' && `Week of ${format(start, 'MMM d')} - ${format(end, 'MMM d, yyyy')}`}
-              {viewMode === 'month' && format(currentDate, 'MMMM yyyy')}
-            </p>
-          </div>
+    <div className="flex flex-col h-[calc(100vh-12rem)] bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* Floating Header */}
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm shadow-md border-b border-gray-200">
+        <div className="px-6 py-4">
+          {/* Title and Primary Actions */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-4">
+              <div>
+                <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                  Staff Roster
+                </h2>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  {viewMode === 'day' && format(currentDate, 'EEEE, MMMM d, yyyy')}
+                  {viewMode === 'week' && `${format(start, 'MMM d')} - ${format(end, 'MMM d, yyyy')}`}
+                  {viewMode === 'month' && format(currentDate, 'MMMM yyyy')}
+                </p>
+              </div>
 
-          <div className="flex items-center gap-2">
-            {/* Run Optimizer Button */}
-            <button
-              onClick={runOptimization}
-              disabled={isOptimizing || isLoading}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium text-sm"
-            >
-              {isOptimizing ? 'Optimizing...' : '🎯 Run Optimizer'}
-            </button>
+              {/* Coverage Indicator */}
+              <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl border border-blue-200">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  <span className="text-xs font-medium text-gray-700">Coverage</span>
+                </div>
+                <span className={`text-2xl font-bold ${stats.coveragePercent >= 90 ? 'text-emerald-600' : stats.coveragePercent >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {stats.coveragePercent}%
+                </span>
+              </div>
+            </div>
 
-            {/* View Mode Toggle */}
-            <div className="bg-gray-100 rounded-md p-1 flex gap-1">
-              {(['day', 'week', 'month'] as ViewMode[]).map(mode => (
+            <div className="flex items-center gap-3">
+              {/* Optimizer Button with Gradient */}
+              <button
+                onClick={() => setShowOptimizerModal(true)}
+                disabled={isOptimizing || isLoading}
+                className="relative px-6 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed transition-all duration-200 font-semibold text-sm shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:transform-none"
+              >
+                {isOptimizing ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Optimizing...
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Run Optimizer
+                  </span>
+                )}
+              </button>
+
+              {/* Zoom Controls */}
+              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                {(['compact', 'normal', 'comfortable'] as ZoomLevel[]).map(level => (
+                  <button
+                    key={level}
+                    onClick={() => setZoomLevel(level)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                      zoomLevel === level
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                    title={`${level.charAt(0).toUpperCase() + level.slice(1)} view`}
+                  >
+                    {level === 'compact' && '─'}
+                    {level === 'normal' && '═'}
+                    {level === 'comfortable' && '≡'}
+                  </button>
+                ))}
+              </div>
+
+              {/* View Mode Tabs */}
+              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                {(['day', 'week', 'month'] as ViewMode[]).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                      viewMode === mode
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Navigation */}
+              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
                 <button
-                  key={mode}
-                  onClick={() => setViewMode(mode)}
-                  className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                    viewMode === mode
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  onClick={() => navigate('prev')}
+                  className="p-2 rounded-lg hover:bg-white transition-all duration-200 text-gray-700 hover:text-blue-600"
+                  title="Previous"
                 >
-                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
                 </button>
-              ))}
-            </div>
 
-            {/* Navigation */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => navigate('prev')}
-                className="p-2 rounded-md hover:bg-gray-100 transition-colors"
-                title="Previous"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
+                <button
+                  onClick={goToToday}
+                  className="px-4 py-2 text-sm font-medium text-blue-600 hover:bg-white rounded-lg transition-all duration-200"
+                >
+                  Today
+                </button>
 
-              <button
-                onClick={goToToday}
-                className="px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-              >
-                Today
-              </button>
-
-              <button
-                onClick={() => navigate('next')}
-                className="p-2 rounded-md hover:bg-gray-100 transition-colors"
-                title="Next"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
+                <button
+                  onClick={() => navigate('next')}
+                  className="p-2 rounded-lg hover:bg-white transition-all duration-200 text-gray-700 hover:text-blue-600"
+                  title="Next"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Compact Stats Bar */}
+          <div className="grid grid-cols-5 gap-3">
+            <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl border border-gray-200">
+              <span className="text-xs font-medium text-gray-600">Shifts</span>
+              <span className="text-lg font-bold text-gray-900">{stats.totalShifts}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl border border-blue-200">
+              <span className="text-xs font-medium text-blue-700">Assigned</span>
+              <span className="text-lg font-bold text-blue-900">{stats.totalAssignments}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl border border-purple-200">
+              <span className="text-xs font-medium text-purple-700">Required</span>
+              <span className="text-lg font-bold text-purple-900">{stats.totalRequired}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-br from-red-50 to-red-100 rounded-xl border border-red-200">
+              <span className="text-xs font-medium text-red-700">Gaps</span>
+              <span className="text-lg font-bold text-red-900">{stats.unassignedCount}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl border border-amber-200">
+              <span className="text-xs font-medium text-amber-700">Overtime</span>
+              <span className="text-lg font-bold text-amber-900">{stats.overtimeCount}</span>
+            </div>
+          </div>
         </div>
 
-        {/* Stats Summary */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
-          <div className="bg-gray-50 rounded p-3">
-            <div className="text-xs text-gray-600">Total Shifts</div>
-            <div className="text-2xl font-bold text-gray-900">{stats.totalShifts}</div>
+        {/* Error/Success Banner */}
+        {error && (
+          <div className={`mx-6 mb-4 px-4 py-3 rounded-xl border ${
+            error.startsWith('✅')
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              : 'bg-red-50 border-red-200 text-red-700'
+          }`}>
+            <p className="text-sm font-medium">{error}</p>
           </div>
-          <div className="bg-blue-50 rounded p-3">
-            <div className="text-xs text-blue-600">Assigned</div>
-            <div className="text-2xl font-bold text-blue-900">{stats.totalAssignments}</div>
-          </div>
-          <div className="bg-gray-50 rounded p-3">
-            <div className="text-xs text-gray-600">Required</div>
-            <div className="text-2xl font-bold text-gray-900">{stats.totalRequired}</div>
-          </div>
-          <div className="bg-red-50 rounded p-3">
-            <div className="text-xs text-red-600">Gaps</div>
-            <div className="text-2xl font-bold text-red-900">{stats.unassignedCount}</div>
-          </div>
-          <div className="bg-orange-50 rounded p-3">
-            <div className="text-xs text-orange-600">Overtime</div>
-            <div className="text-2xl font-bold text-orange-900">{stats.overtimeCount}</div>
-          </div>
-        </div>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-gray-200">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-green-500"></div>
-            <span className="text-xs text-gray-600">Optimal</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-            <span className="text-xs text-gray-600">Warning (40-48h)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-red-500"></div>
-            <span className="text-xs text-gray-600">Overtime (&gt;48h)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-gray-400"></div>
-            <span className="text-xs text-gray-600">Unassigned</span>
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div>
-              <div className="font-medium">Error loading roster data</div>
-              <div className="text-xs mt-1 opacity-90">{error}</div>
+      {/* Scrollable Content Area */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-6 py-4 scroll-smooth"
+        style={{ scrollBehavior: 'smooth' }}
+      >
+        {isLoading && scheduleData.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <svg className="animate-spin h-12 w-12 text-blue-600 mx-auto mb-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              <p className="text-gray-600 font-medium">Loading schedule...</p>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Loading State */}
-      {isLoading ? (
-        <div className="bg-white rounded-lg shadow p-8">
-          <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <span className="ml-3 text-gray-600">Loading roster data...</span>
-          </div>
-        </div>
-      ) : (
-        /* Schedule Grid */
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="divide-y divide-gray-200">
-            {scheduleData.map((daySchedule) => {
-              const dateObj = parseISO(daySchedule.date)
-              const isToday = isSameDay(dateObj, new Date())
+        ) : (
+          <div className={zoomStyles.spacing}>
+            {days.map(day => {
+              const dateStr = format(day, 'yyyy-MM-dd')
+              const dayData = scheduleData.find(d => d.date === dateStr)
+              const dayShifts = dayData?.shifts || []
+              const isCurrentDay = isToday(day)
+              const isPastDay = isPast(day) && !isCurrentDay
+              const isFutureDay = isFuture(day)
 
               return (
-                <div key={daySchedule.date} className="p-4 hover:bg-gray-50 transition-colors">
+                <div
+                  key={dateStr}
+                  className={`bg-white rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 border ${
+                    isCurrentDay
+                      ? 'border-blue-300 ring-2 ring-blue-200 ring-offset-2'
+                      : 'border-gray-200'
+                  } ${isPastDay ? 'opacity-60' : ''}`}
+                >
                   {/* Day Header */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`text-center ${isToday ? 'bg-blue-600 text-white rounded-lg px-3 py-2' : ''}`}>
-                        <div className={`text-xs font-medium uppercase ${isToday ? 'text-blue-100' : 'text-gray-500'}`}>
-                          {format(dateObj, 'EEE')}
+                  <div className={`${zoomStyles.cardPadding} border-b border-gray-100 ${
+                    isCurrentDay ? 'bg-gradient-to-r from-blue-50 to-purple-50' : 'bg-gray-50'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`${
+                          isCurrentDay
+                            ? 'bg-gradient-to-br from-blue-600 to-purple-600 text-white'
+                            : 'bg-white text-gray-900'
+                        } w-14 h-14 rounded-xl flex flex-col items-center justify-center shadow-sm`}>
+                          <span className="text-xs font-medium opacity-80">{format(day, 'EEE')}</span>
+                          <span className="text-xl font-bold">{format(day, 'd')}</span>
                         </div>
-                        <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-gray-900'}`}>
-                          {format(dateObj, 'd')}
+                        <div>
+                          <h3 className={`${zoomStyles.titleSize} font-bold text-gray-900`}>
+                            {format(day, 'EEEE, MMMM d, yyyy')}
+                          </h3>
+                          <p className={`${zoomStyles.textSize} text-gray-600`}>
+                            {dayShifts.length} shift{dayShifts.length !== 1 ? 's' : ''} scheduled
+                          </p>
                         </div>
+                        {isCurrentDay && (
+                          <span className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-full">
+                            TODAY
+                          </span>
+                        )}
+                        {isPastDay && (
+                          <span className="px-3 py-1 bg-gray-400 text-white text-xs font-medium rounded-full">
+                            PAST
+                          </span>
+                        )}
                       </div>
-                      <div>
-                        <div className="font-semibold text-gray-900">{format(dateObj, 'EEEE')}</div>
-                        <div className="text-xs text-gray-500">{format(dateObj, 'MMMM d, yyyy')}</div>
-                      </div>
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {daySchedule.shifts.length} shift{daySchedule.shifts.length !== 1 ? 's' : ''}
                     </div>
                   </div>
 
-                  {/* Shifts for the day */}
-                  <div className="space-y-2 ml-16">
-                    {daySchedule.shifts.length === 0 ? (
-                      <div className="text-center py-8 text-gray-400 text-sm">
-                        No shifts scheduled
+                  {/* Shifts Grid */}
+                  <div className={`${zoomStyles.cardPadding}`}>
+                    {dayShifts.length === 0 ? (
+                      <div className="text-center py-12 text-gray-400">
+                        <svg className="w-16 h-16 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <p className={`${zoomStyles.textSize} font-medium`}>No shifts scheduled</p>
                       </div>
                     ) : (
-                      daySchedule.shifts.map((shift) => {
-                        const gap = shift.requiredCount - shift.assignments.length
+                      <div className={`grid grid-cols-1 ${viewMode === 'day' ? 'lg:grid-cols-1' : 'lg:grid-cols-2 xl:grid-cols-3'} ${zoomStyles.gap}`}>
+                        {dayShifts.map(shift => {
+                          const gap = shift.requiredCount - shift.assignments.length
+                          const coverageRate = shift.requiredCount > 0
+                            ? Math.round((shift.assignments.length / shift.requiredCount) * 100)
+                            : 0
 
-                        return (
-                          <div
-                            key={shift.id}
-                            className={`rounded-lg p-4 ${getShiftStatusColor(shift)} transition-all hover:shadow-md`}
-                          >
-                            {/* Shift Header */}
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <h4 className="font-semibold text-gray-900">{shift.name}</h4>
-                                  <span className="text-xs px-2 py-0.5 bg-white rounded-full text-gray-600">
-                                    {shift.role}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-3 mt-1 text-sm text-gray-600">
-                                  <span className="flex items-center gap-1">
+                          return (
+                            <div
+                              key={shift.id}
+                              className={`${zoomStyles.cardPadding} rounded-xl bg-gradient-to-br from-white to-gray-50 border hover:shadow-lg transition-all duration-200 ${getShiftStatusBorder(shift)}`}
+                              title={`${shift.role} at ${shift.location || 'Unknown location'}\nTime: ${shift.startTime} - ${shift.endTime}\nSkills needed: ${shift.role}\nStaff required: ${shift.requiredCount}\nAssigned: ${shift.assignments.length}`}
+                            >
+                              {/* Shift Header */}
+                              <div className="flex items-start justify-between mb-3 cursor-help">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className={`${zoomStyles.titleSize} font-bold text-gray-900`}>
+                                      {shift.role}
+                                    </span>
+                                    {shift.location && (
+                                      <span className={`${zoomStyles.badgeSize} px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full font-medium`}>
+                                        📍 {shift.location}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className={`flex items-center gap-2 ${zoomStyles.textSize} text-gray-600`}>
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
-                                    {shift.startTime} - {shift.endTime}
+                                    <span className="font-medium">{shift.startTime} - {shift.endTime}</span>
+                                  </div>
+                                </div>
+
+                                {/* Coverage Badge */}
+                                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${
+                                  coverageRate === 100
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : coverageRate >= 50
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-red-100 text-red-700'
+                                }`}>
+                                  <span className={`${zoomStyles.textSize} font-bold`}>
+                                    {shift.assignments.length} / {shift.requiredCount}
                                   </span>
-                                  {shift.location && (
-                                    <span className="flex items-center gap-1">
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                                      </svg>
-                                      {shift.location}
-                                    </span>
+                                </div>
+                              </div>
+
+                              {/* Progress Bar */}
+                              <div className="mb-3">
+                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                  <div
+                                    className={`h-full transition-all duration-500 ${
+                                      coverageRate === 100
+                                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
+                                        : coverageRate >= 50
+                                        ? 'bg-gradient-to-r from-amber-500 to-amber-600'
+                                        : 'bg-gradient-to-r from-red-500 to-red-600'
+                                    }`}
+                                    style={{ width: `${coverageRate}%` }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Assignments */}
+                              {shift.assignments.length > 0 ? (
+                                <div className={`flex flex-wrap ${zoomStyles.gap}`}>
+                                  {shift.assignments.map(assignment => {
+                                    const tooltipText = [
+                                      `${assignment.employeeName} (${assignment.employeeCode})`,
+                                      `Weekly hours: ${assignment.weeklyHours}h`,
+                                      ...(assignment.warnings || [])
+                                    ].join('\\n')
+
+                                    return (
+                                      <div
+                                        key={assignment.id}
+                                        className={`${zoomStyles.badgeSize} ${zoomStyles.cardPadding} rounded-lg ${getStatusColor(assignment.status)} cursor-help transform hover:scale-105 transition-transform duration-200`}
+                                        title={tooltipText}
+                                      >
+                                        <div className="font-semibold">{assignment.employeeName}</div>
+                                        <div className="text-[10px] opacity-75 font-medium">{assignment.employeeCode}</div>
+                                        {assignment.warnings && assignment.warnings.length > 0 && (
+                                          <div className="text-[10px] mt-1 font-medium">
+                                            ⚠️ {assignment.warnings[0]}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+
+                                  {/* Empty Slots */}
+                                  {gap > 0 && Array.from({ length: Math.min(gap, 3) }).map((_, i) => (
+                                    <div
+                                      key={`empty-${i}`}
+                                      className={`${zoomStyles.badgeSize} ${zoomStyles.cardPadding} rounded-lg border-2 border-dashed border-gray-300 bg-white text-gray-400 flex items-center justify-center cursor-help hover:border-blue-400 hover:bg-blue-50 transition-all duration-200`}
+                                      title={`⚠️ ${gap} position${gap !== 1 ? 's' : ''} need to be filled`}
+                                    >
+                                      <span className="font-medium">Unassigned</span>
+                                    </div>
+                                  ))}
+                                  {gap > 3 && (
+                                    <div className={`${zoomStyles.badgeSize} ${zoomStyles.cardPadding} rounded-lg bg-red-100 text-red-700 font-bold`}>
+                                      +{gap - 3} more gaps
+                                    </div>
                                   )}
                                 </div>
-                              </div>
-
-                              <div className="text-right">
-                                <div className={`text-sm font-semibold ${gap > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                  {shift.assignments.length} / {shift.requiredCount}
+                              ) : (
+                                <div className="text-center py-6 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+                                  <p className={`${zoomStyles.textSize} text-gray-500 font-medium`}>
+                                    No assignments - {shift.requiredCount} needed
+                                  </p>
                                 </div>
-                                <div className="text-xs text-gray-500">assigned</div>
-                                {gap > 0 && (
-                                  <div className="mt-1 text-xs font-medium text-red-600">
-                                    ⚠️ {gap} gap{gap !== 1 ? 's' : ''}
-                                  </div>
-                                )}
-                              </div>
+                              )}
                             </div>
-
-                            {/* Assignments */}
-                            {shift.assignments.length > 0 ? (
-                              <div className="flex flex-wrap gap-2">
-                                {shift.assignments.map((assignment) => {
-                                  const tooltipText = [
-                                    `${assignment.employeeName} (${assignment.employeeCode})`,
-                                    `Weekly hours: ${assignment.weeklyHours}h`,
-                                    ...(assignment.warnings || [])
-                                  ].join('\n')
-
-                                  return (
-                                    <div
-                                      key={assignment.id}
-                                      className={`px-3 py-2 rounded border ${getStatusColor(assignment.status)} text-sm cursor-help`}
-                                      title={tooltipText}
-                                    >
-                                      <div className="font-medium">{assignment.employeeName}</div>
-                                      <div className="text-xs opacity-75">{assignment.employeeCode}</div>
-                                      {assignment.warnings && assignment.warnings.length > 0 && (
-                                        <div className="text-xs mt-1 opacity-90">
-                                          {assignment.warnings.map((w, i) => (
-                                            <div key={i}>⚠️ {w}</div>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )
-                                })}
-
-                                {/* Show empty slots */}
-                                {gap > 0 && Array.from({ length: gap }).map((_, i) => (
-                                  <div
-                                    key={`empty-${i}`}
-                                    className="px-3 py-2 rounded border border-dashed border-gray-300 bg-white text-sm text-gray-400 flex items-center justify-center min-w-[120px] cursor-help"
-                                    title={`⚠️ ${gap} position${gap !== 1 ? 's' : ''} need${gap === 1 ? 's' : ''} to be filled for this shift`}
-                                  >
-                                    <span>Unassigned</span>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-center py-4 text-gray-400 text-sm border-2 border-dashed border-gray-300 rounded">
-                                No assignments - {shift.requiredCount} needed
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })
+                          )
+                        })}
+                      </div>
                     )}
                   </div>
                 </div>
               )
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Info Note */}
-      {!isLoading && scheduleData.length > 0 && scheduleData.every(d => d.shifts.length === 0) && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div>
-              <div className="font-medium">No shift requirements found</div>
-              <div className="text-xs mt-1 opacity-90">
-                Add shift requirements to your database or click "Run Optimizer" to generate optimized assignments for existing shifts.
+      {/* Optimizer Time Window Modal */}
+      {showOptimizerModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900">Configure Optimization</h2>
+                <button
+                  onClick={() => setShowOptimizerModal(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
+              <p className="text-gray-600 mt-2">Select the time window for roster optimization</p>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Quick Presets */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-3">Quick Presets</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { value: 'day', label: 'Today Only', icon: '📅', desc: '1 day' },
+                    { value: 'week', label: 'This Week', icon: '📆', desc: '7 days' },
+                    { value: 'month', label: 'This Month', icon: '🗓️', desc: '~30 days' },
+                    { value: '3months', label: '3 Months', icon: '📊', desc: '~90 days' },
+                    { value: '6months', label: '6 Months', icon: '📈', desc: '~180 days' },
+                    { value: 'custom', label: 'Custom Range', icon: '⚙️', desc: 'Pick dates' }
+                  ].map(preset => (
+                    <button
+                      key={preset.value}
+                      onClick={() => setOptimizeWindow(preset.value as any)}
+                      className={`p-4 rounded-xl border-2 transition-all duration-200 text-left ${
+                        optimizeWindow === preset.value
+                          ? 'border-blue-500 bg-blue-50 shadow-md'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="text-2xl">{preset.icon}</span>
+                        <div className="flex-1">
+                          <div className="font-semibold text-gray-900">{preset.label}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{preset.desc}</div>
+                        </div>
+                        {optimizeWindow === preset.value && (
+                          <svg className="w-5 h-5 text-blue-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Date Range */}
+              {optimizeWindow === 'custom' && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <label className="block text-sm font-semibold text-gray-900 mb-3">Custom Date Range</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                      <input
+                        type="date"
+                        value={customOptimizeStart}
+                        onChange={(e) => setCustomOptimizeStart(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+                      <input
+                        type="date"
+                        value={customOptimizeEnd}
+                        onChange={(e) => setCustomOptimizeEnd(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Date Range Preview */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                <div className="flex items-center gap-2 text-sm">
+                  <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="font-medium text-gray-900">Optimization will run for:</span>
+                </div>
+                <div className="mt-2 text-lg font-semibold text-blue-600">
+                  {(() => {
+                    const { start, end } = getOptimizationDateRange()
+                    if (!start || !end) return 'Select dates above'
+                    return `${start} to ${end}`
+                  })()}
+                </div>
+              </div>
+
+              {/* Info Box */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <div className="flex gap-3">
+                  <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <div>
+                    <div className="font-semibold text-amber-900 text-sm">Important Notes</div>
+                    <ul className="text-xs text-amber-800 mt-1 space-y-1">
+                      <li>• Larger time windows take longer to optimize</li>
+                      <li>• Existing assignments in this range will be replaced</li>
+                      <li>• Optimization considers employee availability & qualifications</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="p-6 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowOptimizerModal(false)}
+                className="px-6 py-2.5 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-100 transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={runOptimization}
+                disabled={optimizeWindow === 'custom' && (!customOptimizeStart || !customOptimizeEnd)}
+                className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed transition-all font-semibold shadow-lg flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Start Optimization
+              </button>
             </div>
           </div>
         </div>

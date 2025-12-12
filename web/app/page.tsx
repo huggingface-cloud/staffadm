@@ -15,6 +15,9 @@ type Tab = 'schedule' | 'dashboard' | 'hours' | 'forecast' | 'employees' | 'sett
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('schedule')
+  // Department filter state (currently for UI display - components can access via context or direct API filtering)
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
+  const [departments, setDepartments] = useState<any[]>([])
   const { isAuthenticated, isLoading, user, logout } = useAuth()
   const router = useRouter()
 
@@ -30,6 +33,40 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem('activeTab', activeTab)
   }, [activeTab])
+
+  // Fetch departments for Super Admin
+  useEffect(() => {
+    if (isAuthenticated && user?.role === 'super_admin') {
+      const fetchDepartments = async () => {
+        try {
+          const token = localStorage.getItem('token')
+          const response = await fetch('http://localhost:8001/api/departments', {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setDepartments(data)
+          }
+        } catch (error) {
+          console.error('Failed to fetch departments:', error)
+        }
+      }
+      fetchDepartments()
+
+      // Load saved department filter
+      const savedDept = localStorage.getItem('selectedDepartment')
+      if (savedDept) {
+        setSelectedDepartment(savedDept)
+      }
+    }
+  }, [isAuthenticated, user])
+
+  // Save selected department to localStorage
+  useEffect(() => {
+    localStorage.setItem('selectedDepartment', selectedDepartment)
+  }, [selectedDepartment])
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -80,6 +117,20 @@ export default function Home() {
               </p>
             </div>
             <div className="flex items-center gap-3">
+              {user?.role === 'super_admin' && departments.length > 0 && (
+                <select
+                  value={selectedDepartment}
+                  onChange={(e) => setSelectedDepartment(e.target.value)}
+                  className="px-3 py-2 text-sm font-medium bg-white border border-gray-200 rounded-lg hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                >
+                  <option value="all">All Departments</option>
+                  {departments.map((dept) => (
+                    <option key={dept.id} value={dept.id}>
+                      {dept.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100">
                 <p className="text-sm font-medium text-gray-900">{user?.full_name}</p>
                 <p className="text-xs text-gray-600">
