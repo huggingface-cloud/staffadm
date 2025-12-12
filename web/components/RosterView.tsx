@@ -125,8 +125,10 @@ export default function RosterView() {
     setIsLoading(true)
     setError(null)
     try {
+      const token = localStorage.getItem('token')
       const response = await fetch(
-        `http://localhost:8001/api/roster/view?start_date=${start}&end_date=${end}`
+        `http://localhost:8001/api/roster/view?start_date=${start}&end_date=${end}`,
+        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
       )
 
       if (!response.ok) {
@@ -209,15 +211,29 @@ export default function RosterView() {
 
     const { start, end } = getOptimizationDateRange()
 
+    // Get auth token and selected department
+    const token = localStorage.getItem('token')
+    const selectedDept = localStorage.getItem('selectedDepartment')
+
+    const requestBody: any = {
+      start_date: start,
+      end_date: end,
+      save_results: true
+    }
+
+    // Add department filter if not 'all'
+    if (selectedDept && selectedDept !== 'all') {
+      requestBody.shift_filters = { department_id: selectedDept }
+    }
+
     try {
       const response = await fetch('http://localhost:8001/api/optimize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          start_date: start,
-          end_date: end,
-          save_results: true
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(requestBody)
       })
 
       if (!response.ok) {
@@ -228,7 +244,8 @@ export default function RosterView() {
 
       // Reload data regardless of status
       const rosterResponse = await fetch(
-        `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`
+        `http://localhost:8001/api/roster/view?start_date=${startDate}&end_date=${endDate}`,
+        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
       )
       const data = await rosterResponse.json()
       setScheduleData(data || [])
