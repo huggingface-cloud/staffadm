@@ -88,7 +88,7 @@ _cache = CacheManager()
 
 def cached(ttl: int = 300, prefix: str = ""):
     """
-    Decorator for caching function results.
+    Decorator for caching function results (supports both sync and async functions).
 
     Args:
         ttl: Time to live in seconds (default 5 minutes)
@@ -96,35 +96,67 @@ def cached(ttl: int = 300, prefix: str = ""):
 
     Example:
         @cached(ttl=600, prefix="employees")
-        def get_employees(dept_id):
+        async def get_employees(dept_id):
             return expensive_query()
     """
     def decorator(func: Callable):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Generate cache key
-            cache_key = _cache._generate_key(
-                prefix or func.__name__,
-                *args,
-                **kwargs
-            )
+        import asyncio
+        import inspect
 
-            # Try to get from cache
-            result = _cache.get(cache_key)
-            if result is not None:
+        is_async = inspect.iscoroutinefunction(func)
+
+        if is_async:
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                # Generate cache key
+                cache_key = _cache._generate_key(
+                    prefix or func.__name__,
+                    *args,
+                    **kwargs
+                )
+
+                # Try to get from cache
+                result = _cache.get(cache_key)
+                if result is not None:
+                    return result
+
+                # Execute function and cache result
+                result = await func(*args, **kwargs)
+                _cache.set(cache_key, result, ttl)
+
                 return result
 
-            # Execute function and cache result
-            result = func(*args, **kwargs)
-            _cache.set(cache_key, result, ttl)
+            # Add cache control methods to wrapper
+            async_wrapper.clear_cache = lambda: _cache.invalidate_pattern(prefix or func.__name__)
+            async_wrapper.cache_manager = _cache
 
-            return result
+            return async_wrapper
+        else:
+            @wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                # Generate cache key
+                cache_key = _cache._generate_key(
+                    prefix or func.__name__,
+                    *args,
+                    **kwargs
+                )
 
-        # Add cache control methods to wrapper
-        wrapper.clear_cache = lambda: _cache.invalidate_pattern(prefix or func.__name__)
-        wrapper.cache_manager = _cache
+                # Try to get from cache
+                result = _cache.get(cache_key)
+                if result is not None:
+                    return result
 
-        return wrapper
+                # Execute function and cache result
+                result = func(*args, **kwargs)
+                _cache.set(cache_key, result, ttl)
+
+                return result
+
+            # Add cache control methods to wrapper
+            sync_wrapper.clear_cache = lambda: _cache.invalidate_pattern(prefix or func.__name__)
+            sync_wrapper.cache_manager = _cache
+
+            return sync_wrapper
     return decorator
 
 
