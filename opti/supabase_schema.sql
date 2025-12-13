@@ -92,7 +92,9 @@ CREATE TABLE IF NOT EXISTS roster_assignments (
   start_time TIMESTAMPTZ NOT NULL,
   duration_hours INTEGER NOT NULL,
   role TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  -- Prevent duplicate assignments of the same employee to the same shift
+  UNIQUE(employee_id, shift_id, optimization_run_id)
 );
 
 -- Optimization queue (for background processing)

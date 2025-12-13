@@ -37,20 +37,26 @@ export default function Home() {
   // Fetch departments for Super Admin
   useEffect(() => {
     if (isAuthenticated && user?.role === 'super_admin') {
+      console.log('🔍 Fetching departments for Super Admin:', user)
       const fetchDepartments = async () => {
         try {
-          const token = localStorage.getItem('token')
+          const token = localStorage.getItem('auth_token')
+          console.log('🔑 Token exists:', !!token)
           const response = await fetch('http://localhost:8001/api/departments', {
             headers: {
               'Authorization': `Bearer ${token}`
             }
           })
+          console.log('📡 Departments response status:', response.status)
           if (response.ok) {
             const data = await response.json()
+            console.log('✅ Departments fetched:', data)
             setDepartments(data)
+          } else {
+            console.error('❌ Failed to fetch departments:', response.status, await response.text())
           }
         } catch (error) {
-          console.error('Failed to fetch departments:', error)
+          console.error('❌ Failed to fetch departments:', error)
         }
       }
       fetchDepartments()
@@ -60,6 +66,8 @@ export default function Home() {
       if (savedDept) {
         setSelectedDepartment(savedDept)
       }
+    } else {
+      console.log('⏭️ Skipping departments fetch - Auth:', isAuthenticated, 'Role:', user?.role)
     }
   }, [isAuthenticated, user])
 
@@ -105,7 +113,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-gray-50">
       {/* Modern Header with Glassmorphism Effect */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="py-4 flex justify-between items-center">
             <div>
@@ -149,7 +157,7 @@ export default function Home() {
       </header>
 
       {/* Modern Tab Navigation with Pill Design */}
-      <nav className="bg-white/60 backdrop-blur-lg border-b border-gray-200/50">
+      <nav className="fixed top-[73px] left-0 right-0 z-40 bg-white/60 backdrop-blur-lg border-b border-gray-200/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex space-x-2 overflow-x-auto py-4 scrollbar-hide">
             {tabs.map((tab) => (
@@ -182,7 +190,7 @@ export default function Home() {
       </nav>
 
       {/* Content Area with Smooth Transitions */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-[145px]">
         <div className="animate-fadeIn">
           {activeTab === 'schedule' && <RosterView />}
           {activeTab === 'dashboard' && <Dashboard />}

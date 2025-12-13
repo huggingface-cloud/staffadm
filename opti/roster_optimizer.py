@@ -208,16 +208,22 @@ class RosterOptimizer:
     def add_soft_constraints(self):
         """
         Applies constraints that introduce cost/penalties (Overtime).
+        IMPORTANT: Weekly hours are capped at 120% of max_hours_week (HARD LIMIT).
         """
         # Weekly Hour Limits / Overtime Calculation
         for week in self.weeks:
             for i in self.employee_ids:
                 max_hours = self.employees[i]['max_hours_week']
-                
+
                 # Sum of hours assigned to employee i in this week
-                hours_assigned = pulp.lpSum(self.assignment_vars[i][j] * self.shifts[j]['duration_hours'] 
+                hours_assigned = pulp.lpSum(self.assignment_vars[i][j] * self.shifts[j]['duration_hours']
                                             for j in self.shift_ids if self.shifts[j]['week_number'] == week)
-                
+
+                # HARD CONSTRAINT: Cannot exceed 120% of weekly limit (max 20% overtime)
+                absolute_max_hours = max_hours * 1.2
+                self.model += hours_assigned <= absolute_max_hours, f"Max_Weekly_Hours_{i}_Week_{week}"
+
+                # Soft constraint for overtime penalty (between max_hours and 120%)
                 # Constraint: hours_assigned - max_hours <= overtime_vars[i]
                 # If hours_assigned > max_hours, overtime_vars[i] captures the excess.
                 self.model += hours_assigned - max_hours <= self.overtime_vars[i], f"Overtime_Calc_{i}_Week_{week}"

@@ -125,7 +125,7 @@ export default function RosterView() {
     setIsLoading(true)
     setError(null)
     try {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('auth_token')
       const response = await fetch(
         `http://localhost:8001/api/roster/view?start_date=${start}&end_date=${end}`,
         { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
@@ -212,7 +212,7 @@ export default function RosterView() {
     const { start, end } = getOptimizationDateRange()
 
     // Get auth token and selected department
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem('auth_token')
     const selectedDept = localStorage.getItem('selectedDepartment')
 
     const requestBody: any = {
@@ -227,7 +227,7 @@ export default function RosterView() {
     }
 
     try {
-      const response = await fetch('http://localhost:8001/api/optimize', {
+      const response = await fetch('http://localhost:8001/optimizer', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

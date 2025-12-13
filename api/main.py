@@ -743,6 +743,16 @@ async def run_optimization(
         raise HTTPException(status_code=500, detail=f"Failed to communicate with optimizer: {str(e)}")
 
 
+# Alias endpoint for backward compatibility
+@app.post("/optimizer")
+async def run_optimization_alias(
+    request: dict = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Alias for /api/optimize endpoint."""
+    return await run_optimization(request, current_user)
+
+
 @app.get("/api/optimizer/jobs/{job_id}")
 async def get_optimization_status(job_id: str):
     """
