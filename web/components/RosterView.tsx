@@ -237,7 +237,15 @@ export default function RosterView() {
       })
 
       if (!response.ok) {
-        throw new Error(`Optimization failed: ${response.statusText}`)
+        // Try to get error details from response body
+        const errorData = await response.json().catch(() => ({}))
+        const errorDetail = errorData.detail || response.statusText
+
+        // Provide user-friendly error message
+        if (errorDetail.includes('Failed to communicate with optimizer')) {
+          throw new Error('⚠️ Optimizer service is not running. Please start the optimizer backend service on port 9001.')
+        }
+        throw new Error(`Optimization failed: ${errorDetail}`)
       }
 
       const result = await response.json()
