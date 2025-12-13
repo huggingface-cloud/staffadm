@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh1ZXF2b3pnZWViaGxmZnhtaXFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODcwMSwiZXhwIjoyMDgwMzY0NzAxfQ.305q-C9loNljanzQ567sNvafSm0W4nRPgScWj4g7G90\" python3 -c \"\nimport requests\nfrom datetime import datetime\n\n# Get shifts for December\nresponse = requests.get(\n    ''https://xueqvozgeebhlffxmiqp.supabase.co/rest/v1/shift_requirements'',\n    params={\n        ''select'': ''id,start_time,end_time,headcount_needed'',\n        ''start_time'': ''gte.2025-12-01'',\n        ''start_time'': ''lte.2025-12-31'',\n        ''order'': ''start_time''\n    },\n    headers={\n        ''apikey'': ''$SERVICE_KEY'',\n        ''Authorization'': ''Bearer $SERVICE_KEY''\n    }\n)\n\nshifts = response.json()\nprint(f''Total shifts in December: {len(shifts)}'')\nprint()\n\n# Group by date and calculate hours per shift\nfrom collections import defaultdict\nshifts_by_date = defaultdict(list)\n\nfor shift in shifts[:20]:  # Show first 20\n    start = datetime.fromisoformat(shift[''start_time''].replace(''+00:00'', ''''))\n    end = datetime.fromisoformat(shift[''end_time''].replace(''+00:00'', ''''))\n    duration = (end - start).total_seconds() / 3600\n    date_str = start.strftime(''%Y-%m-%d'')\n    \n    shifts_by_date[date_str].append({\n        ''start'': start.strftime(''%H:%M''),\n        ''end'': end.strftime(''%H:%M''),\n        ''duration'': duration,\n        ''headcount'': shift[''headcount_needed'']\n    })\n\nprint(''Sample shifts (first 3 days):'')\nfor date, date_shifts in sorted(shifts_by_date.items())[:3]:\n    print(f''\\n{date}:'')\n    for s in date_shifts:\n        print(f''  {s[\"\"start\"\"]}-{s[\"\"end\"\"]} ({s[\"\"duration\"\"]}h) x{s[\"\"headcount\"\"]} people'')\n\")"
+      "Bash(SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh1ZXF2b3pnZWViaGxmZnhtaXFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODcwMSwiZXhwIjoyMDgwMzY0NzAxfQ.305q-C9loNljanzQ567sNvafSm0W4nRPgScWj4g7G90\" curl -s \"https://xueqvozgeebhlffxmiqp.supabase.co/rest/v1/admin_users?select=id,email,full_name,role&email=eq.admin@staffadmin.com\" -H \"apikey: $SERVICE_KEY\" -H \"Authorization: Bearer $SERVICE_KEY\")",
+      "Bash(python -m py_compile:*)",
+      "Bash(python3:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh1ZXF2b3pnZWViaGxmZnhtaXFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODcwMSwiZXhwIjoyMDgwMzY0NzAxfQ.305q-C9loNljanzQ567sNvafSm0W4nRPgScWj4g7G90\")",
+      "Bash(jq:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
