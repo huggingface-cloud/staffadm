@@ -30,9 +30,11 @@ app = FastAPI(
 )
 
 # CORS middleware for Next.js integration
+# Use CORS_ORIGINS (consistent with backend) or fall back to ALLOWED_ORIGINS for backwards compatibility
+cors_origins = os.getenv("CORS_ORIGINS") or os.getenv("ALLOWED_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_origins=cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -189,7 +191,7 @@ async def optimize_roster(request: OptimizationRequest, background_tasks: Backgr
             from supabase_integration import create_client
             supabase = create_client(
                 os.getenv('SUPABASE_URL'),
-                os.getenv('SUPABASE_SERVICE_KEY')
+                os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
             )
 
             job = supabase.table('optimization_runs').insert({
@@ -230,7 +232,7 @@ async def get_job_status(job_id: str):
         from supabase_integration import create_client
         supabase = create_client(
             os.getenv('SUPABASE_URL'),
-            os.getenv('SUPABASE_SERVICE_KEY')
+            os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
         )
 
         response = supabase.table('optimization_runs').select('*').eq('id', job_id).single().execute()
@@ -265,7 +267,7 @@ async def get_job_roster(job_id: str):
         from supabase_integration import create_client
         supabase = create_client(
             os.getenv('SUPABASE_URL'),
-            os.getenv('SUPABASE_SERVICE_KEY')
+            os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
         )
 
         # Get job
