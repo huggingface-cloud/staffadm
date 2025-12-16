@@ -16,7 +16,9 @@
       "Bash(jq:*)",
       "Bash(cat:*)",
       "Bash(source rostering_venv/bin/activate)",
-      "Bash(python optimizer_api.py:*)"
+      "Bash(python optimizer_api.py:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []
