@@ -25,7 +25,8 @@ class SupabaseRosterService:
             supabase_key: Supabase anon/service key (defaults to env var)
         """
         self.url = supabase_url or os.getenv('SUPABASE_URL')
-        self.key = supabase_key or os.getenv('SUPABASE_SERVICE_KEY')
+        # Support both SUPABASE_KEY and legacy SUPABASE_SERVICE_KEY for backwards compatibility
+        self.key = supabase_key or os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
 
         if not self.url or not self.key:
             raise ValueError("Supabase URL and key must be provided")

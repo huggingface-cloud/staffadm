@@ -11,6 +11,7 @@ from auth_middleware import get_current_user, get_current_super_admin, apply_dep
 from cache_manager import cached, invalidate_cache
 import httpx
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class UserResponse(BaseModel):
     department_name: Optional[str]
 
 # Optimizer API configuration
-OPTIMIZER_API_URL = "http://localhost:9001"
+OPTIMIZER_API_URL = os.getenv("OPTIMIZER_API_URL", "http://localhost:9001")
 
 app = FastAPI(
     title="Staff Admin & Rostering API",
@@ -48,10 +49,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware
+# CORS middleware - allow configured origins
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
