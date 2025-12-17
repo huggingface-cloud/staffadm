@@ -10,8 +10,9 @@ import AdminPanel from '@/components/AdminPanel'
 import Dashboard from '@/components/Dashboard'
 import Forecast from '@/components/Forecast'
 import EmployeeHours from '@/components/EmployeeHours'
+import Health from '@/components/Health'
 
-type Tab = 'schedule' | 'dashboard' | 'hours' | 'forecast' | 'employees' | 'settings' | 'admin'
+type Tab = 'schedule' | 'dashboard' | 'hours' | 'forecast' | 'employees' | 'settings' | 'admin' | 'health'
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('schedule')
@@ -24,7 +25,7 @@ export default function Home() {
   // Load saved tab from localStorage on mount
   useEffect(() => {
     const savedTab = localStorage.getItem('activeTab')
-    if (savedTab && ['schedule', 'dashboard', 'hours', 'forecast', 'employees', 'settings', 'admin'].includes(savedTab)) {
+    if (savedTab && ['schedule', 'dashboard', 'hours', 'forecast', 'employees', 'settings', 'admin', 'health'].includes(savedTab)) {
       setActiveTab(savedTab as Tab)
     }
   }, [])
@@ -108,6 +109,7 @@ export default function Home() {
     { id: 'employees' as Tab, label: 'Employees', icon: '👥' },
     { id: 'admin' as Tab, label: 'Admin', icon: '⚡' },
     { id: 'settings' as Tab, label: 'Settings', icon: '⚙️' },
+    { id: 'health' as Tab, label: 'Health', icon: '🏥' },
   ]
 
   return (
@@ -199,6 +201,7 @@ export default function Home() {
           {activeTab === 'employees' && <Employees />}
           {activeTab === 'admin' && <AdminPanel />}
           {activeTab === 'settings' && <OptimizerSettings />}
+          {activeTab === 'health' && <Health />}
         </div>
       </main>
     </div>
