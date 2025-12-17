@@ -319,7 +319,12 @@ class SupabaseRosterService:
                 })
 
         if assignments:
-            self.client.table('roster_assignments').insert(assignments).execute()
+            # Use upsert to handle duplicate shift_id/employee_id combinations
+            # This allows re-running optimization without manual cleanup
+            self.client.table('roster_assignments').upsert(
+                assignments,
+                on_conflict='shift_id,employee_id'
+            ).execute()
 
     # ======================================================================
     # COMPLETE WORKFLOW WITH PERSISTENCE
