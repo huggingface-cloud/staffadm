@@ -21,7 +21,11 @@ interface EmployeeHoursData {
 
 type ViewMode = 'week' | 'month'
 
-export default function EmployeeHours() {
+interface EmployeeHoursProps {
+  selectedDepartment?: string
+}
+
+export default function EmployeeHours({ selectedDepartment = 'all' }: EmployeeHoursProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('week')
   const [currentDate, setCurrentDate] = useState(new Date())
   const [employeesData, setEmployeesData] = useState<EmployeeHoursData[]>([])
@@ -52,7 +56,11 @@ export default function EmployeeHours() {
 
     try {
       const { start, end } = getDateRange()
-      const response = await fetch(`http://localhost:8001/api/employee-hours?start_date=${start}&end_date=${end}`)
+      // Add department filter to the API call
+      const departmentParam = selectedDepartment && selectedDepartment !== 'all'
+        ? `&department_id=${selectedDepartment}`
+        : ''
+      const response = await fetch(`http://localhost:8001/api/employee-hours?start_date=${start}&end_date=${end}${departmentParam}`)
 
       if (!response.ok) {
         throw new Error('Failed to fetch employee hours')
@@ -69,7 +77,7 @@ export default function EmployeeHours() {
 
   useEffect(() => {
     fetchEmployeeHours()
-  }, [currentDate, viewMode])
+  }, [currentDate, viewMode, selectedDepartment])
 
   // Navigation functions
   const goToPrevious = () => {

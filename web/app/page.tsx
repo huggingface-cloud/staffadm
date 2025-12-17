@@ -194,11 +194,11 @@ export default function Home() {
       {/* Content Area with Smooth Transitions */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-[145px]">
         <div className="animate-fadeIn">
-          {activeTab === 'schedule' && <RosterView />}
-          {activeTab === 'dashboard' && <Dashboard />}
-          {activeTab === 'hours' && <EmployeeHours />}
-          {activeTab === 'forecast' && <Forecast />}
-          {activeTab === 'employees' && <Employees />}
+          {activeTab === 'schedule' && <RosterView selectedDepartment={selectedDepartment} />}
+          {activeTab === 'dashboard' && <Dashboard selectedDepartment={selectedDepartment} />}
+          {activeTab === 'hours' && <EmployeeHours selectedDepartment={selectedDepartment} />}
+          {activeTab === 'forecast' && <Forecast selectedDepartment={selectedDepartment} />}
+          {activeTab === 'employees' && <Employees selectedDepartment={selectedDepartment} />}
           {activeTab === 'admin' && <AdminPanel />}
           {activeTab === 'settings' && <OptimizerSettings />}
           {activeTab === 'health' && <Health />}

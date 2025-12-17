@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query, Body, Depends
+from fastapi import FastAPI, HTTPException, Query, Body, Depends, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -49,6 +50,35 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Cache headers middleware for better performance
+class CacheHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # Only add cache headers to GET requests that returned successfully
+        if request.method == "GET" and 200 <= response.status_code < 300:
+            # Define cache TTLs for different endpoints
+            path = request.url.path
+            if "/health" in path:
+                response.headers["Cache-Control"] = "public, max-age=60"
+            elif "/api/departments" in path or "/api/qualifications" in path:
+                response.headers["Cache-Control"] = "public, max-age=600"  # 10 min
+            elif "/api/employees" in path or "/api/shifts" in path:
+                response.headers["Cache-Control"] = "public, max-age=300"  # 5 min
+            elif "/api/employee-hours" in path or "/api/roster" in path:
+                response.headers["Cache-Control"] = "public, max-age=180"  # 3 min
+            else:
+                # Default cache for other GET endpoints
+                response.headers["Cache-Control"] = "public, max-age=60"
+
+            # Add ETag support
+            response.headers["Vary"] = "Accept-Encoding"
+
+        return response
+
+# Add cache headers middleware
+app.add_middleware(CacheHeadersMiddleware)
+
 # CORS middleware - allow configured origins
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -75,7 +105,9 @@ def read_root():
 
 
 @app.get("/health")
-def health_check():
+def health_check(response: Response):
+    # Add cache headers for health check
+    response.headers["Cache-Control"] = "public, max-age=60"
     return {"status": "healthy"}
 
 
@@ -449,14 +481,22 @@ async def get_employee_hours(
         supabase = get_supabase()
 
         # Fetch employees with contracts
-        employees_response = supabase.table('employees').select('''
+        # Build query with department filter if provided
+        query = supabase.table('employees').select('''
             id,
             first_name,
             last_name,
             department_id,
             departments(name),
             contracts(weekly_hours_limit)
-        ''').eq('active_for_rostering', True).execute()
+        ''').eq('active_for_rostering', True)
+
+        # Apply department filter if specified
+        department_id = request.query_params.get('department_id')
+        if department_id and department_id != 'all':
+            query = query.eq('department_id', department_id)
+
+        employees_response = query.execute()
 
         if not employees_response.data:
             return []
@@ -483,7 +523,14 @@ async def get_employee_hours(
         for emp in employees_response.data:
             emp_id = emp['id']
             emp_name = f"{emp['first_name']} {emp['last_name']}"
-            dept_name = emp['departments']['name'] if emp.get('departments') else 'Unknown'
+
+            # Handle department name with better fallback
+            dept_name = 'Unknown'
+            if emp.get('departments') and isinstance(emp['departments'], dict):
+                dept_name = emp['departments'].get('name', 'Unknown')
+            elif emp.get('department_id'):
+                # If we have a department_id but no department object, it's a data issue
+                dept_name = f'Dept-{emp["department_id"][:8]}'
 
             # Get contracted weekly hours
             contracted_hours = 40  # default
